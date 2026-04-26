@@ -205,12 +205,14 @@ def main():
     parser.add_argument("--condition-index", type=int, default=0)
     parser.add_argument("--hist-len", type=int, default=1)
     parser.add_argument("--idm-checkpoint", required=True)
-    parser.add_argument("--idm-backend", choices=["anypos", "custom"], default="anypos")
-    parser.add_argument("--idm-model-name", default="direction_aware_with_split")
-    parser.add_argument("--idm-dinov2-name", default="facebook/dinov2-with-registers-base")
-    parser.add_argument("--idm-left-arm-dim", type=int, default=6)
-    parser.add_argument("--idm-right-arm-dim", type=int, default=6)
+    parser.add_argument("--idm-backend", choices=["vidar", "custom"], default="vidar")
+    parser.add_argument("--idm-model-name", default="mask")
+    parser.add_argument("--idm-dinov2-name", default="")
+    parser.add_argument("--idm-left-arm-dim", type=int, default=7)
+    parser.add_argument("--idm-right-arm-dim", type=int, default=7)
     parser.add_argument("--idm-model-output-dim", type=int, default=16)
+    parser.add_argument("--idm-target-action-dim", type=int, default=16)
+    parser.add_argument("--idm-action-adapter", choices=["identity"], default="identity")
     parser.add_argument("--idm-custom-backend", default=None)
     parser.add_argument("--depth-backend", choices=["da3", "repeat"], default="da3")
     parser.add_argument("--da3-model-dir", default=None)
@@ -257,6 +259,8 @@ def main():
         left_arm_dim=args.idm_left_arm_dim,
         right_arm_dim=args.idm_right_arm_dim,
         model_output_dim=args.idm_model_output_dim,
+        target_action_dim=args.idm_target_action_dim,
+        action_adapter=args.idm_action_adapter,
         custom_backend_target=args.idm_custom_backend,
         device=str(idm_device),
     )

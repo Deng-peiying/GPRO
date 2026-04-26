@@ -235,12 +235,14 @@ def main():
     parser.add_argument("--gradient-checkpointing-rate", type=float, default=1.0)
     parser.add_argument("--use-reference-model", action="store_true")
     parser.add_argument("--idm-checkpoint", required=True)
-    parser.add_argument("--idm-backend", choices=["anypos", "custom"], default="anypos")
-    parser.add_argument("--idm-model-name", default="direction_aware_with_split")
-    parser.add_argument("--idm-dinov2-name", default="facebook/dinov2-with-registers-base")
-    parser.add_argument("--idm-left-arm-dim", type=int, default=6)
-    parser.add_argument("--idm-right-arm-dim", type=int, default=6)
+    parser.add_argument("--idm-backend", choices=["vidar", "custom"], default="vidar")
+    parser.add_argument("--idm-model-name", default="mask")
+    parser.add_argument("--idm-dinov2-name", default="")
+    parser.add_argument("--idm-left-arm-dim", type=int, default=7)
+    parser.add_argument("--idm-right-arm-dim", type=int, default=7)
     parser.add_argument("--idm-model-output-dim", type=int, default=16)
+    parser.add_argument("--idm-target-action-dim", type=int, default=16)
+    parser.add_argument("--idm-action-adapter", choices=["identity"], default="identity")
     parser.add_argument("--idm-custom-backend", default=None)
     parser.add_argument("--depth-backend", choices=["da3", "repeat"], default="da3")
     parser.add_argument("--da3-model-dir", default=None)
@@ -300,6 +302,8 @@ def main():
         left_arm_dim=args.idm_left_arm_dim,
         right_arm_dim=args.idm_right_arm_dim,
         model_output_dim=args.idm_model_output_dim,
+        target_action_dim=args.idm_target_action_dim,
+        action_adapter=args.idm_action_adapter,
         custom_backend_target=args.idm_custom_backend,
         device=str(idm_device),
     )
@@ -314,7 +318,7 @@ def main():
         ref_view_strategy=args.da3_ref_view_strategy,
     )
     reward_model = StepExecutabilityReward(
-        action_dim=args.idm_model_output_dim,
+        action_dim=args.idm_target_action_dim,
         dof_weights=parse_optional_float_list(args.dof_weights),
         hard_veto_penalty=args.hard_veto_penalty,
         max_control_delta=args.max_control_delta,

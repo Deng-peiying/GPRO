@@ -12,21 +12,6 @@ import torch.nn.functional as F
 
 
 WORKSPACE_ROOT = Path(__file__).resolve().parents[3]
-ANYPOS_ROOT = WORKSPACE_ROOT / "AnyPos-main"
-
-if str(ANYPOS_ROOT) not in sys.path:
-    sys.path.insert(0, str(ANYPOS_ROOT))
-
-from idm.idm import IDM as AnyPosIDMModel  # type: ignore  # noqa: E402
-from idm.preprocessor import DinoPreprocessor, segment_robot_arms  # type: ignore  # noqa: E402
-
-try:
-    from idm.spec import infer_action_dim  # type: ignore  # noqa: E402
-except Exception:
-    def infer_action_dim(output_dim: int | None, left_arm_dim: int, right_arm_dim: int) -> int:
-        if output_dim is not None:
-            return int(output_dim)
-        return int(left_arm_dim + 1 + right_arm_dim + 1)
 
 
 class IDMBackend(Protocol):
@@ -54,13 +39,10 @@ def decode_next_action(
     """
     Decode a single-step next action for the transition `t -> t+1`.
 
-    Preferred future interface:
-    custom IDM backends can implement `decode_next_action(...) -> [B, D]`.
+    Preferred interface: backends implement `decode_next_action(...) -> [B, D]`.
 
-    Current fallback for AnyPos-style sequence decoders:
-    concatenate the current and next RGB frames, optionally attach a 2-frame
-    depth video, run `decode_actions`, and use the final decoded action as
-    `action_t`, which aligns with `action[t] = control_state[t+1]`.
+    Fallback for sequence decoders: concatenate current and next RGB frames,
+    run `decode_actions`, and return the final decoded action.
     """
     active_cond = dict(cond_batch or {})
     if control_state is not None:
@@ -88,57 +70,58 @@ def decode_next_action(
     return decoded[:, -1]
 
 
+# ---------------------------------------------------------------------------
+# Vidar IDM backend
+# ---------------------------------------------------------------------------
+
+VIDAR_ROOT = WORKSPACE_ROOT / "vidar"
+if str(VIDAR_ROOT) not in sys.path:
+    sys.path.insert(0, str(VIDAR_ROOT))
+
+
 @dataclass
-class AnyPosBackendConfig:
+class VidarBackendConfig:
     checkpoint: str
-    model_name: str = "direction_aware_with_split"
-    dinov2_name: str = "facebook/dinov2-with-registers-base"
-    freeze_dinov2: bool = False
-    left_arm_dim: int = 6
-    right_arm_dim: int = 6
-    model_output_dim: int | None = None
+    model_name: str = "mask"
+    output_dim: int = 16
     device: str | None = None
 
 
-class _AnyPosPreprocessorArgs:
+class _VidarPreprocessorArgs:
     use_transform = False
 
 
-class AnyPosIDMBackend:
+class VidarIDMBackend:
     """
-    Bridge adapter for using AnyPos as a temporary IDM backend.
+    Bridge adapter for using the Vidar dual-frame Masked-IDM as the IDM backend.
 
-    Important limitation:
-    AnyPos is an RGB-only image-to-action model. It does not match the target
-    RGB-D_t + control-state_t + RGB-D_{t+1} -> action_t formulation exactly.
-    We therefore use it here only as a bring-up backend to unblock:
-    - GRPO reward wiring
-    - online replan plumbing
-    - future backend swap to the project's own IDM
+    The Vidar MaskedIDM takes:
+        img_t      [B, 3, H, W]   RGB frame at time t   (ImageNet-normalised)
+        dep_t      [B, 1, H, W]   depth at time t       (normalised to [-1, 1])
+        img_next   [B, 3, H, W]   RGB frame at time t+1
+        dep_next   [B, 1, H, W]   depth at time t+1
+        pos_t      [B, 16]        current joint state
+    and directly outputs:
+        pos_{t+1}  [B, 16]        next joint state
+
+    No action adapter is needed because the model already outputs 16-dim
+    Franka control states.
     """
 
-    def __init__(self, cfg: AnyPosBackendConfig):
+    def __init__(self, cfg: VidarBackendConfig):
+        from idm.idm import IDM as VidarIDMModel  # type: ignore  # noqa: E402
+        from idm.preprocessor import DinoPreprocessor as VidarPreprocessor  # type: ignore  # noqa: E402
+
         self.cfg = cfg
         self.device = torch.device(
             cfg.device if cfg.device is not None else ("cuda" if torch.cuda.is_available() else "cpu")
         )
-        self.model_output_dim = infer_action_dim(cfg.model_output_dim, cfg.left_arm_dim, cfg.right_arm_dim)
-        self.action_dim = int(self.model_output_dim)
-        self.preprocessor = DinoPreprocessor(_AnyPosPreprocessorArgs())
-        model_kwargs = dict(
-            model_name=cfg.model_name,
-            dinov2_name=cfg.dinov2_name,
-            freeze_dinov2=cfg.freeze_dinov2,
-            output_dim=self.model_output_dim,
-        )
-        try:
-            self.model = AnyPosIDMModel(
-                **model_kwargs,
-                left_arm_dim=cfg.left_arm_dim,
-                right_arm_dim=cfg.right_arm_dim,
-            )
-        except TypeError:
-            self.model = AnyPosIDMModel(**model_kwargs)
+        self.action_dim = int(cfg.output_dim)  # 16
+
+        # Build model
+        self.model = VidarIDMModel(model_name=cfg.model_name, output_dim=cfg.output_dim)
+
+        # Load checkpoint
         try:
             checkpoint = torch.load(cfg.checkpoint, map_location="cpu", weights_only=False)
         except TypeError:
@@ -150,42 +133,23 @@ class AnyPosIDMBackend:
         for param in self.model.parameters():
             param.requires_grad_(False)
 
+        # Preprocessor (inference mode, no augmentation)
+        self.preprocessor = VidarPreprocessor(_VidarPreprocessorArgs())
+
+    # ------------------------------------------------------------------
+    # Preprocessing helpers
+    # ------------------------------------------------------------------
+
     def _video_to_rgb01(self, videos: torch.Tensor) -> torch.Tensor:
+        """Convert [-1, 1] video tensor to [0, 1]."""
         if videos.ndim != 5:
             raise ValueError(f"Expected videos [B, T, C, H, W], got {tuple(videos.shape)}")
         return videos.float().clamp(-1, 1).add(1.0).mul_(0.5)
 
-    def _segment_regions(self, image: np.ndarray) -> torch.Tensor:
-        _, arm_boxes = segment_robot_arms(image)
-        h, w = image.shape[:2]
-        left_split = int((arm_boxes["left_split"] / w) * 518)
-        right_split = int((arm_boxes["right_split"] / w) * 518)
-        arm_split = int((arm_boxes["arm_gripper_split"] / h) * 518)
-        gripper_split = int((arm_boxes["gripper_split"] / w) * 518)
-
-        processed = self.preprocessor.process_image(image)
-        regions = []
-        for region_idx in range(4):
-            if region_idx == 0:
-                region = processed[:, :arm_split, :left_split]
-            elif region_idx == 1:
-                region = processed[:, arm_split:, :gripper_split]
-            elif region_idx == 2:
-                region = processed[:, :arm_split, right_split:]
-            else:
-                region = processed[:, arm_split:, gripper_split:]
-            resized = F.interpolate(
-                region.unsqueeze(0),
-                size=(processed.shape[1], processed.shape[2]),
-                mode="bilinear",
-                align_corners=False,
-            ).squeeze(0)
-            regions.append(resized)
-        return torch.stack(regions, dim=0)
-
-    def _prepare_batch(self, frames_rgb01: torch.Tensor) -> torch.Tensor:
+    def _preprocess_rgb(self, rgb_01: torch.Tensor) -> torch.Tensor:
+        """[B, 3, H, W] in [0,1] -> ImageNet-normalised, resized to 518x518."""
         images_np = (
-            frames_rgb01.mul(255.0)
+            rgb_01.mul(255.0)
             .round()
             .clamp(0, 255)
             .byte()
@@ -193,24 +157,23 @@ class AnyPosIDMBackend:
             .cpu()
             .numpy()
         )
-        if "with_split" in self.cfg.model_name:
-            region_batches = [self._segment_regions(image) for image in images_np]
-            stacked = torch.stack(region_batches, dim=1)
-            return stacked.to(self.device)
-        processed = [self.preprocessor.process_image(image) for image in images_np]
+        processed = [self.preprocessor.process_image(img) for img in images_np]
         return torch.stack(processed, dim=0).to(self.device)
 
-    @torch.no_grad()
-    def decode_actions(self, videos: torch.Tensor, cond_batch: dict[str, Any]) -> torch.Tensor:
-        del cond_batch
-        rgb01 = self._video_to_rgb01(videos)
-        batch_size, horizon = rgb01.shape[:2]
-        flat_frames = rgb01.reshape(batch_size * horizon, *rgb01.shape[2:])
-        model_inputs = self._prepare_batch(flat_frames)
-        predictions = self.model(model_inputs).view(batch_size, horizon, -1)
-        if predictions.shape[-1] != self.action_dim:
-            raise ValueError(f"Expected native IDM output dim {self.action_dim}, got {predictions.shape[-1]}")
-        return predictions
+    def _preprocess_depth(self, depth: torch.Tensor) -> torch.Tensor:
+        """[B, H, W] or [B, 1, H, W] depth in arbitrary range -> normalised [B, 1, 518, 518]."""
+        if depth.ndim == 3:
+            depth = depth.unsqueeze(1)  # [B, 1, H, W]
+        # Resize to 518x518
+        resized = F.interpolate(depth.float(), size=(518, 518), mode="bilinear", align_corners=False)
+        # Normalise to [-1, 1] (same convention as vidar preprocessor)
+        resized = (resized - resized.mean()) / (resized.std() + 1e-6)
+        resized = resized.clamp(-3, 3) / 3.0  # soft clamp to [-1, 1]
+        return resized.to(self.device)
+
+    # ------------------------------------------------------------------
+    # Core decode methods
+    # ------------------------------------------------------------------
 
     @torch.no_grad()
     def decode_next_action(
@@ -223,16 +186,99 @@ class AnyPosIDMBackend:
         next_depth: torch.Tensor | None = None,
         cond_batch: dict[str, Any] | None = None,
     ) -> torch.Tensor:
-        del current_depth, next_depth, control_state, cond_batch
-        transition_video = torch.cat([current_rgb, next_rgb], dim=1)
-        rgb01 = self._video_to_rgb01(transition_video)
-        batch_size = rgb01.shape[0]
-        flat_frames = rgb01.reshape(batch_size * rgb01.shape[1], *rgb01.shape[2:])
-        model_inputs = self._prepare_batch(flat_frames)
-        predictions = self.model(model_inputs).view(batch_size, rgb01.shape[1], -1)
-        if predictions.shape[-1] != self.action_dim:
-            raise ValueError(f"Expected native IDM output dim {self.action_dim}, got {predictions.shape[-1]}")
-        return predictions[:, -1]
+        """
+        Decode a single-step action for transition t -> t+1.
+
+        Returns:
+            action_t: [B, 16] — the predicted next joint state (pos_{t+1}).
+        """
+        # current_rgb / next_rgb: [B, 1, C, H, W] or [B, C, H, W]
+        if current_rgb.ndim == 5:
+            current_rgb = current_rgb[:, 0]  # [B, C, H, W]
+        if next_rgb.ndim == 5:
+            next_rgb = next_rgb[:, 0]
+
+        # Convert from [-1,1] to [0,1]
+        cur_rgb_01 = current_rgb.float().clamp(-1, 1).add(1.0).mul_(0.5)
+        nxt_rgb_01 = next_rgb.float().clamp(-1, 1).add(1.0).mul_(0.5)
+
+        # Preprocess RGB (ImageNet normalisation + resize to 518)
+        img_t = self._preprocess_rgb(cur_rgb_01)
+        img_next = self._preprocess_rgb(nxt_rgb_01)
+
+        # Preprocess depth
+        if current_depth is not None:
+            if current_depth.ndim == 4 and current_depth.shape[1] > 1:
+                current_depth = current_depth[:, 0]  # take first frame
+            dep_t = self._preprocess_depth(current_depth)
+        else:
+            dep_t = torch.zeros(img_t.shape[0], 1, 518, 518, device=self.device)
+
+        if next_depth is not None:
+            if next_depth.ndim == 4 and next_depth.shape[1] > 1:
+                next_depth = next_depth[:, 0]
+            dep_next = self._preprocess_depth(next_depth)
+        else:
+            dep_next = torch.zeros(img_t.shape[0], 1, 518, 518, device=self.device)
+
+        # Control state
+        if control_state is None:
+            pos_t = torch.zeros(img_t.shape[0], 16, device=self.device)
+        else:
+            pos_t = control_state.to(device=self.device, dtype=torch.float32)
+            if pos_t.ndim == 1:
+                pos_t = pos_t.unsqueeze(0)
+
+        # Forward pass
+        action_t = self.model(img_t, dep_t, img_next, dep_next, pos_t)
+        return action_t  # [B, 16]
+
+    @torch.no_grad()
+    def decode_actions(self, videos: torch.Tensor, cond_batch: dict[str, Any]) -> torch.Tensor:
+        """
+        Decode actions for a video sequence by processing consecutive frame pairs.
+
+        Args:
+            videos: [B, T, C, H, W] in [-1, 1]
+            cond_batch: must contain 'control_state' [B, 16]
+
+        Returns:
+            actions: [B, T-1, 16] — predicted next states for each transition.
+        """
+        rgb01 = self._video_to_rgb01(videos)
+        batch_size, horizon = rgb01.shape[:2]
+        if horizon < 2:
+            raise ValueError(f"Need at least 2 frames for decode_actions, got {horizon}")
+
+        control_state = cond_batch.get("control_state")
+        depth_video = cond_batch.get("pred_depth_video", cond_batch.get("depth_video"))
+
+        actions = []
+        current_state = control_state
+        for t in range(horizon - 1):
+            cur_rgb = rgb01[:, t]  # [B, C, H, W] in [0,1]
+            nxt_rgb = rgb01[:, t + 1]
+
+            cur_dep = depth_video[:, t] if depth_video is not None else None
+            nxt_dep = depth_video[:, t + 1] if depth_video is not None else None
+
+            img_t = self._preprocess_rgb(cur_rgb)
+            img_next = self._preprocess_rgb(nxt_rgb)
+            dep_t = self._preprocess_depth(cur_dep) if cur_dep is not None else torch.zeros(batch_size, 1, 518, 518, device=self.device)
+            dep_next = self._preprocess_depth(nxt_dep) if nxt_dep is not None else torch.zeros(batch_size, 1, 518, 518, device=self.device)
+
+            if current_state is None:
+                pos_t = torch.zeros(batch_size, 16, device=self.device)
+            else:
+                pos_t = current_state.to(device=self.device, dtype=torch.float32)
+                if pos_t.ndim == 1:
+                    pos_t = pos_t.unsqueeze(0)
+
+            action_t = self.model(img_t, dep_t, img_next, dep_next, pos_t)
+            actions.append(action_t)
+            current_state = action_t  # autoregressive: predicted state becomes next input
+
+        return torch.stack(actions, dim=1)  # [B, T-1, 16]
 
 
 class CustomIDMBackend:
@@ -261,29 +307,25 @@ def build_idm_backend(
     *,
     backend_type: str,
     checkpoint: str | None = None,
-    model_name: str = "direction_aware_with_split",
-    dinov2_name: str = "facebook/dinov2-with-registers-base",
+    model_name: str = "mask",
+    dinov2_name: str = "",
     freeze_dinov2: bool = False,
-    left_arm_dim: int = 6,
-    right_arm_dim: int = 6,
+    left_arm_dim: int = 7,
+    right_arm_dim: int = 7,
     model_output_dim: int | None = None,
+    target_action_dim: int | None = 16,
+    action_adapter: str = "identity",
     custom_backend_target: str | None = None,
     custom_backend_kwargs: dict[str, Any] | None = None,
     device: str | None = None,
 ) -> IDMBackend:
     backend_type = backend_type.lower()
-    if backend_type == "anypos":
+    if backend_type == "vidar":
         if checkpoint is None:
-            raise ValueError("checkpoint is required for backend_type=anypos")
-        return AnyPosIDMBackend(
-            AnyPosBackendConfig(
+            raise ValueError("checkpoint is required for backend_type=vidar")
+        return VidarIDMBackend(
+            VidarBackendConfig(
                 checkpoint=checkpoint,
-                model_name=model_name,
-                dinov2_name=dinov2_name,
-                freeze_dinov2=freeze_dinov2,
-                left_arm_dim=left_arm_dim,
-                right_arm_dim=right_arm_dim,
-                model_output_dim=model_output_dim,
                 device=device,
             )
         )
@@ -291,4 +333,4 @@ def build_idm_backend(
         if custom_backend_target is None:
             raise ValueError("custom_backend_target is required for backend_type=custom")
         return CustomIDMBackend(custom_backend_target, custom_backend_kwargs)
-    raise ValueError(f"Unsupported IDM backend type: {backend_type}")
+    raise ValueError(f"Unsupported IDM backend type: {backend_type}. Use 'vidar' or 'custom'.")

@@ -1,5 +1,5 @@
 from .depth_backends import DepthBackend, RepeatCurrentDepthBackend
-from .idm_backends import AnyPosBackendConfig, AnyPosIDMBackend, CustomIDMBackend, build_idm_backend
+from .idm_backends import CustomIDMBackend, VidarBackendConfig, VidarIDMBackend, build_idm_backend
 from .state_action_reward import (
     RewardBreakdown as StepRewardBreakdown,
     StepExecutabilityReward,
@@ -12,14 +12,14 @@ from .wan_t2v import WanTextToVideo
 RewardBreakdown = StepRewardBreakdown
 
 __all__ = [
-    "AnyPosBackendConfig",
-    "AnyPosIDMBackend",
     "CustomIDMBackend",
     "DepthBackend",
     "RepeatCurrentDepthBackend",
     "RewardBreakdown",
     "StepExecutabilityReward",
     "StepRewardBreakdown",
+    "VidarBackendConfig",
+    "VidarIDMBackend",
     "WanImageToVideo",
     "WanTextToVideo",
     "build_idm_backend",

@@ -14,7 +14,7 @@ trap 'rc=$?; echo "[ERROR] ${BASH_SOURCE[0]} failed at line ${LINENO}: ${BASH_CO
 # Optional overrides:
 #   STEPS=10 GROUP_SIZE=4 HORIZON_STEPS=2 bash scripts/run_wan_grpo_smoke_tuned.sh
 
-export PYTHONPATH="/root/autodl-tmp/repos/EVA-main:/root/autodl-tmp/repos/Depth-Anything-3-main/src:/root/autodl-tmp/repos/AnyPos-main:${PYTHONPATH:-}"
+export PYTHONPATH="/root/autodl-tmp/repos/EVA-main:/root/autodl-tmp/repos/Depth-Anything-3-main/src:/root/autodl-tmp/repos/vidar:${PYTHONPATH:-}"
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 export TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-1}"
 export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
@@ -25,7 +25,7 @@ CONFIG_PATH="${CONFIG_PATH:-/root/autodl-tmp/repos/EVA-main/configurations/algor
 CONDITION_BANK="${CONDITION_BANK:-/root/autodl-tmp/wan_grpo_condition_bank.pt}"
 SAVE_DIR="${SAVE_DIR:-/root/autodl-tmp/grpo_smoke_tuned}"
 
-ANYPOS_CKPT="${ANYPOS_CKPT:-/root/autodl-tmp/models/AnyPos/anypos_model.pt}"
+VIDAR_CKPT="${VIDAR_CKPT:-/root/autodl-tmp/models/vidar/vidar_model.pt}"
 DINO_DIR="${DINO_DIR:-/root/autodl-tmp/models/dinov2-with-registers-base}"
 DA3_DIR="${DA3_DIR:-/root/autodl-tmp/models/DA3-LARGE-1.1}"
 DA3_REPO_ROOT="${DA3_REPO_ROOT:-/root/autodl-tmp/repos/Depth-Anything-3-main}"
@@ -93,12 +93,9 @@ python -m algorithms.wan.run_state_unrolled_grpo \
   --lora-alpha "${LORA_ALPHA}" \
   --lora-dropout "${LORA_DROPOUT}" \
   --gradient-checkpointing-rate "${GRADIENT_CHECKPOINTING_RATE}" \
-  --idm-checkpoint "${ANYPOS_CKPT}" \
-  --idm-backend anypos \
-  --idm-model-name direction_aware_with_split \
-  --idm-dinov2-name "${DINO_DIR}" \
-  --idm-left-arm-dim 6 \
-  --idm-right-arm-dim 6 \
+  --idm-checkpoint "${VIDAR_CKPT}" \
+  --idm-backend vidar \
+  --idm-model-name mask \
   --idm-model-output-dim 16 \
   --depth-backend da3 \
   --da3-model-dir "${DA3_DIR}" \
