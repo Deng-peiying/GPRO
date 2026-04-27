@@ -37,7 +37,7 @@ IDM_DEVICE="${IDM_DEVICE:-cuda:1}"
 STEPS="${STEPS:-10}"
 LOG_INTERVAL="${LOG_INTERVAL:-1}"
 SAVE_INTERVAL="${SAVE_INTERVAL:-5}"
-GROUP_SIZE="${GROUP_SIZE:-4}"
+GROUP_SIZE="${GROUP_SIZE:-8}"
 HORIZON_STEPS="${HORIZON_STEPS:-2}"
 HIST_LEN="${HIST_LEN:-1}"
 FLOW_SAMPLING_NOISE_STD="${FLOW_SAMPLING_NOISE_STD:-0.05}"
@@ -51,8 +51,8 @@ LOG_RATIO_CLIP="${LOG_RATIO_CLIP:-2.0}"
 GRAD_CLIP_NORM="${GRAD_CLIP_NORM:-0.5}"
 REF_UPDATE_INTERVAL="${REF_UPDATE_INTERVAL:-0}"
 
-LORA_RANK="${LORA_RANK:-8}"
-LORA_ALPHA="${LORA_ALPHA:-16}"
+LORA_RANK="${LORA_RANK:-32}"
+LORA_ALPHA="${LORA_ALPHA:-32}"
 LORA_DROPOUT="${LORA_DROPOUT:-0.0}"
 GRADIENT_CHECKPOINTING_RATE="${GRADIENT_CHECKPOINTING_RATE:-1.0}"
 
@@ -62,7 +62,10 @@ OVERRIDE_N_FRAMES="${OVERRIDE_N_FRAMES:-5}"
 OVERRIDE_SAMPLE_STEPS="${OVERRIDE_SAMPLE_STEPS:-4}"
 
 HARD_VETO_PENALTY="${HARD_VETO_PENALTY:-50.0}"
-MAX_CONTROL_DELTA="${MAX_CONTROL_DELTA:-0.25}"
+# NOTE: Set MAX_CONTROL_DELTA large (999) to disable per-step delta hard-veto.
+# IDM action outputs may have a different scale from control_state, causing
+# spurious vetoes. Set to a real value (e.g. 0.25) only after confirming scales match.
+MAX_CONTROL_DELTA="${MAX_CONTROL_DELTA:-999.0}"
 FEASIBILITY_WEIGHT="${FEASIBILITY_WEIGHT:-1.0}"
 ACTION_RECOVERY_WEIGHT="${ACTION_RECOVERY_WEIGHT:-1.0}"
 IDM_STABILITY_WEIGHT="${IDM_STABILITY_WEIGHT:-0.1}"
@@ -93,6 +96,7 @@ python -m algorithms.wan.run_state_unrolled_grpo \
   --lora-alpha "${LORA_ALPHA}" \
   --lora-dropout "${LORA_DROPOUT}" \
   --gradient-checkpointing-rate "${GRADIENT_CHECKPOINTING_RATE}" \
+  --use-reference-model \
   --idm-checkpoint "${VIDAR_CKPT}" \
   --idm-backend vidar \
   --idm-model-name mask \

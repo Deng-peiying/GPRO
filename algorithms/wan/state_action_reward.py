@@ -138,6 +138,37 @@ class StepExecutabilityReward:
         hard_invalid = non_finite | bound_invalid | delta_invalid
         feasibility_gate = -hard_invalid.float() * self.hard_veto_penalty
 
+        # DEBUG: print veto breakdown every 50 calls to verify normalization alignment
+        if not hasattr(self, "_debug_call_count"):
+            self._debug_call_count = 0
+        self._debug_call_count += 1
+        if self._debug_call_count % 50 == 1:
+            with torch.no_grad():
+                act_min = action_t.min().item()
+                act_max = action_t.max().item()
+                if control_state_t is not None:
+                    ctrl = _as_batch(control_state_t, action_t.device, action_t.dtype)
+                    ctrl = _match_batch(ctrl, action_t.shape[0])
+                    delta = (action_t - ctrl[:, : action_t.shape[-1]]).abs()
+                    delta_max = delta.amax(dim=1)
+                    print(
+                        f"[REWARD DEBUG call={self._debug_call_count}] "
+                        f"action_t [{act_min:.3f}, {act_max:.3f}] | "
+                        f"ctrl [{ctrl.min().item():.3f}, {ctrl.max().item():.3f}] | "
+                        f"delta_max per sample: {delta_max.tolist()} | "
+                        f"non_finite={non_finite.tolist()} | "
+                        f"delta_invalid={delta_invalid.tolist()} | "
+                        f"hard_invalid={hard_invalid.tolist()}"
+                    )
+                else:
+                    print(
+                        f"[REWARD DEBUG call={self._debug_call_count}] "
+                        f"action_t [{act_min:.3f}, {act_max:.3f}] | "
+                        f"control_state_t=None (delta check skipped) | "
+                        f"non_finite={non_finite.tolist()} | "
+                        f"hard_invalid={hard_invalid.tolist()}"
+                    )
+
         if action_gt is None:
             action_recovery_reward = torch.zeros(action_t.shape[0], device=action_t.device, dtype=torch.float32)
         else:

@@ -30,7 +30,7 @@ trap 'rc=$?; echo "[ERROR] ${BASH_SOURCE[0]} failed at line ${LINENO}: ${BASH_CO
 # ============================================================================
 
 # ---- 环境变量 ----
-export PYTHONPATH="/root/autodl-tmp/dpy/myrepos/EVA-main_v1:/root/autodl-tmp/dpy/myrepos/Depth-Anything-3-main/src:/root/autodl-tmp/dpy/myrepos/vidar:${PYTHONPATH:-}"
+export PYTHONPATH="/root/autodl-tmp/dpy/myrepos/EVA-main:/root/autodl-tmp/dpy/myrepos/Depth-Anything-3-main/src:/root/autodl-tmp/dpy/myrepos/vidar:${PYTHONPATH:-}"
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 export TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-1}"
 export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
@@ -57,25 +57,25 @@ IDM_DEVICE="${IDM_DEVICE:-cuda:1}"
 STEPS="${STEPS:-1000}"
 LOG_INTERVAL="${LOG_INTERVAL:-1}"
 SAVE_INTERVAL="${SAVE_INTERVAL:-50}"
-GROUP_SIZE="${GROUP_SIZE:-2}"
+GROUP_SIZE="${GROUP_SIZE:-4}"
 HORIZON_STEPS="${HORIZON_STEPS:-2}"
 HIST_LEN="${HIST_LEN:-1}"
 FLOW_SAMPLING_NOISE_STD="${FLOW_SAMPLING_NOISE_STD:-0.08}"
 DISCOUNT_GAMMA="${DISCOUNT_GAMMA:-0.98}"
 
 # ---- 优化器 ----
-LR="${LR:-5e-6}"
-WEIGHT_DECAY="${WEIGHT_DECAY:-1e-4}"
-CLIP_EPS="${CLIP_EPS:-0.1}"
-BETA_KL="${BETA_KL:-1e-3}"
-SURROGATE_SIGMA="${SURROGATE_SIGMA:-0.5}"
-LOG_RATIO_CLIP="${LOG_RATIO_CLIP:-2.0}"
-GRAD_CLIP_NORM="${GRAD_CLIP_NORM:-0.5}"
+LR="${LR:-2e-4}"
+WEIGHT_DECAY="${WEIGHT_DECAY:-5e-2}"
+CLIP_EPS="${CLIP_EPS:-0.001}"
+BETA_KL="${BETA_KL:-0.004}"
+SURROGATE_SIGMA="${SURROGATE_SIGMA:-1.0}"
+LOG_RATIO_CLIP="${LOG_RATIO_CLIP:-5.0}"
+GRAD_CLIP_NORM="${GRAD_CLIP_NORM:-1.0}"
 REF_UPDATE_INTERVAL="${REF_UPDATE_INTERVAL:-0}"
 
 # ---- LoRA ----
-LORA_RANK="${LORA_RANK:-8}"
-LORA_ALPHA="${LORA_ALPHA:-16}"
+LORA_RANK="${LORA_RANK:-32}"
+LORA_ALPHA="${LORA_ALPHA:-32}"
 LORA_DROPOUT="${LORA_DROPOUT:-0.0}"
 GRADIENT_CHECKPOINTING_RATE="${GRADIENT_CHECKPOINTING_RATE:-1.0}"
 
@@ -90,6 +90,9 @@ OVERRIDE_SAMPLE_STEPS="${OVERRIDE_SAMPLE_STEPS:-}"
 
 # ---- Reward 权重 ----
 HARD_VETO_PENALTY="${HARD_VETO_PENALTY:-50.0}"
+# control_state_t and IDM outputs are both normalized [0,1].
+# 0.25 = allow 25% range change per step (tight for fast motions).
+# Set to 0.5 as a relaxed starting point; tune down after confirming reward flows.
 MAX_CONTROL_DELTA="${MAX_CONTROL_DELTA:-0.25}"
 FEASIBILITY_WEIGHT="${FEASIBILITY_WEIGHT:-1.0}"
 ACTION_RECOVERY_WEIGHT="${ACTION_RECOVERY_WEIGHT:-1.0}"
@@ -158,6 +161,7 @@ python -m algorithms.wan.run_state_unrolled_grpo \
   --lora-alpha "${LORA_ALPHA}" \
   --lora-dropout "${LORA_DROPOUT}" \
   --gradient-checkpointing-rate "${GRADIENT_CHECKPOINTING_RATE}" \
+  --use-reference-model \
   --idm-checkpoint "${VIDAR_CKPT}" \
   --idm-backend vidar \
   --idm-model-name mask \
