@@ -58,8 +58,9 @@ REF_DEVICE="${REF_DEVICE:-cuda:1}"
 STEPS="${STEPS:-1000}"
 LOG_INTERVAL="${LOG_INTERVAL:-1}"
 SAVE_INTERVAL="${SAVE_INTERVAL:-50}"
-GROUP_SIZE="${GROUP_SIZE:-4}"
+GROUP_SIZE="${GROUP_SIZE:-8}"
 HORIZON_STEPS="${HORIZON_STEPS:-2}"
+NUM_INNER_EPOCHS="${NUM_INNER_EPOCHS:-4}"
 HIST_LEN="${HIST_LEN:-1}"
 FLOW_SAMPLING_NOISE_STD="${FLOW_SAMPLING_NOISE_STD:-0.08}"
 DISCOUNT_GAMMA="${DISCOUNT_GAMMA:-0.98}"
@@ -147,6 +148,7 @@ python -m algorithms.wan.run_state_unrolled_grpo \
   --save-interval "${SAVE_INTERVAL}" \
   --group-size "${GROUP_SIZE}" \
   --horizon-steps "${HORIZON_STEPS}" \
+  --num-inner-epochs "${NUM_INNER_EPOCHS}" \
   --hist-len "${HIST_LEN}" \
   --flow-sampling-noise-std "${FLOW_SAMPLING_NOISE_STD}" \
   --discount-gamma "${DISCOUNT_GAMMA}" \

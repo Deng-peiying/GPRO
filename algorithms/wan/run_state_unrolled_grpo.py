@@ -229,6 +229,8 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--deterministic", action="store_true")
     parser.add_argument("--resume", default=None)
+    parser.add_argument("--num-inner-epochs", type=int, default=1,
+                        help="Number of times to update policy per rollout batch (PPO/GRPO style).")
     parser.add_argument("--lora-rank", type=int, default=8)
     parser.add_argument("--lora-alpha", type=int, default=16)
     parser.add_argument("--lora-dropout", type=float, default=0.0)
@@ -359,6 +361,7 @@ def main():
             grad_clip_norm=args.grad_clip_norm,
             ref_update_interval=args.ref_update_interval,
             discount_gamma=args.discount_gamma,
+            num_inner_epochs=args.num_inner_epochs,
         ),
     )
 
