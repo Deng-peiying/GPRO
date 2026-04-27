@@ -12,7 +12,8 @@ from .state_unrolled_grpo import rollout_state_unrolled_group
 from .state_unrolled_grpo_objective import (
     StateUnrolledGRPOConfig,
     StateUnrolledGRPOLoss,
-    compute_state_unrolled_grpo_loss,
+    compute_single_trace_grpo_loss,
+    group_normalize_rewards,
 )
 
 
@@ -61,7 +62,26 @@ class StateUnrolledGRPOTrainer:
         for param in self.ref_algo.parameters():
             param.requires_grad_(False)
 
+    def _compute_grad_norm(self, device, dtype) -> torch.Tensor:
+        grad_norm = torch.zeros(1, device=device, dtype=dtype)
+        if self.cfg.grad_clip_norm is not None:
+            val = torch.nn.utils.clip_grad_norm_(
+                self.policy_algo.parameters(), self.cfg.grad_clip_norm
+            )
+            grad_norm = torch.as_tensor(val, device=device, dtype=dtype)
+        else:
+            total_sq = None
+            for param in self.policy_algo.parameters():
+                if param.grad is None:
+                    continue
+                g = param.grad.detach().float().pow(2).sum()
+                total_sq = g if total_sq is None else total_sq + g
+            if total_sq is not None:
+                grad_norm = total_sq.sqrt().to(device=device, dtype=dtype)
+        return grad_norm
+
     def train_step(self, cond_batch: dict[str, Any]) -> StateUnrolledGRPOLoss:
+        # ── 1. Rollout (no-grad, sequential, OK on memory) ───────────────────
         rollout_groups = rollout_state_unrolled_group(
             self.policy_algo,
             cond_batch,
@@ -75,40 +95,84 @@ class StateUnrolledGRPOTrainer:
             flow_logprob_sigma=self.cfg.surrogate_sigma,
             discount_gamma=self.cfg.discount_gamma,
         )
-        last_loss_dict = None
-        for inner_epoch in range(self.cfg.num_inner_epochs):
-            loss_dict = compute_state_unrolled_grpo_loss(
-                algo=self.policy_algo,
-                ref_algo=self.ref_algo,
-                rollout_groups=rollout_groups,
-                cfg=StateUnrolledGRPOConfig(
-                    clip_eps=self.cfg.clip_eps,
-                    beta_kl=self.cfg.beta_kl,
-                    surrogate_sigma=self.cfg.surrogate_sigma,
-                    log_ratio_clip=self.cfg.log_ratio_clip,
-                ),
-            )
 
+        grpo_cfg = StateUnrolledGRPOConfig(
+            clip_eps=self.cfg.clip_eps,
+            beta_kl=self.cfg.beta_kl,
+            surrogate_sigma=self.cfg.surrogate_sigma,
+            log_ratio_clip=self.cfg.log_ratio_clip,
+        )
+
+        # ── 2. Pre-compute advantages (no-grad) ──────────────────────────────
+        # Done ONCE outside the inner loop so advantages are stable across epochs.
+        algo_device = next(self.policy_algo.parameters()).device
+        group_advantages: list[torch.Tensor] = []
+        group_rewards_mean: list[torch.Tensor] = []
+        group_rewards_std: list[torch.Tensor] = []
+        for group in rollout_groups:
+            rewards = (
+                torch.stack([t.cumulative_reward for t in group.traces], dim=0)
+                .to(algo_device)
+                .view(-1)
+            )
+            group_rewards_mean.append(rewards.mean().detach())
+            group_rewards_std.append(rewards.std(unbiased=False).detach())
+            group_advantages.append(group_normalize_rewards(rewards).detach())
+
+        total_traces = sum(len(g.traces) for g in rollout_groups)
+        last_loss_dict: StateUnrolledGRPOLoss | None = None
+
+        # ── 3. Inner epochs ──────────────────────────────────────────────────
+        for _inner_epoch in range(self.cfg.num_inner_epochs):
             self.optimizer.zero_grad(set_to_none=True)
-            loss_dict.loss.backward()
-            grad_norm = torch.zeros(1, device=loss_dict.loss.device, dtype=loss_dict.loss.dtype)
-            if self.cfg.grad_clip_norm is not None:
-                grad_norm_value = torch.nn.utils.clip_grad_norm_(self.policy_algo.parameters(), self.cfg.grad_clip_norm)
-                grad_norm = torch.as_tensor(grad_norm_value, device=loss_dict.loss.device, dtype=loss_dict.loss.dtype)
-            else:
-                total_sq = None
-                for param in self.policy_algo.parameters():
-                    if param.grad is None:
-                        continue
-                    grad_sq = param.grad.detach().float().pow(2).sum()
-                    total_sq = grad_sq if total_sq is None else total_sq + grad_sq
-                if total_sq is not None:
-                    grad_norm = total_sq.sqrt().to(device=loss_dict.loss.device, dtype=loss_dict.loss.dtype)
-            loss_dict.grad_norm = grad_norm
+
+            agg_loss = torch.zeros([], device=algo_device)
+            agg_policy = torch.zeros([], device=algo_device)
+            agg_kl = torch.zeros([], device=algo_device)
+            agg_ratio = torch.zeros([], device=algo_device)
+            agg_advantage = torch.zeros([], device=algo_device)
+            n_valid = 0
+
+            for group_i, group in enumerate(rollout_groups):
+                advantages = group_advantages[group_i]
+                for trace, adv in zip(group.traces, advantages):
+                    total_loss, policy_loss, kl_loss, ratio = compute_single_trace_grpo_loss(
+                        algo=self.policy_algo,
+                        ref_algo=self.ref_algo,
+                        trace=trace,
+                        advantage=adv,
+                        cfg=grpo_cfg,
+                    )
+                    # Scale by 1/total so accumulated grad ≈ batch mean
+                    (total_loss / total_traces).backward()
+
+                    agg_loss = agg_loss + total_loss.detach()
+                    agg_policy = agg_policy + policy_loss.detach()
+                    agg_kl = agg_kl + kl_loss.detach()
+                    agg_ratio = agg_ratio + ratio.detach()
+                    agg_advantage = agg_advantage + adv.detach()
+                    n_valid += 1
+
+            if n_valid == 0:
+                continue
+
+            grad_norm = self._compute_grad_norm(algo_device, agg_loss.dtype)
             self.optimizer.step()
-            last_loss_dict = loss_dict
+
+            last_loss_dict = StateUnrolledGRPOLoss(
+                loss=agg_loss / n_valid,
+                policy_loss=agg_policy / n_valid,
+                kl_loss=agg_kl / n_valid,
+                mean_ratio=agg_ratio / n_valid,
+                mean_advantage=agg_advantage / n_valid,
+                group_reward_mean=torch.stack(group_rewards_mean).mean(),
+                group_reward_std=torch.stack(group_rewards_std).mean(),
+                grad_norm=grad_norm,
+            )
 
         self.step += 1
         if self.cfg.ref_update_interval and self.step % self.cfg.ref_update_interval == 0:
             self.sync_reference_policy()
+
         return last_loss_dict
+
