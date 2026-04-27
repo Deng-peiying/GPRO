@@ -142,7 +142,7 @@ class StepExecutabilityReward:
         if not hasattr(self, "_debug_call_count"):
             self._debug_call_count = 0
         self._debug_call_count += 1
-        if self._debug_call_count % 50 == 1:
+        if self._debug_call_count % 10 == 1:
             with torch.no_grad():
                 act_min = action_t.min().item()
                 act_max = action_t.max().item()
@@ -151,13 +151,15 @@ class StepExecutabilityReward:
                     ctrl = _match_batch(ctrl, action_t.shape[0])
                     delta = (action_t - ctrl[:, : action_t.shape[-1]]).abs()
                     delta_max = delta.amax(dim=1)
+                    # Show first sample's full 16-dim vector for inspection
+                    act_vec = action_t[0].detach().cpu().tolist()
+                    act_vec_str = "[" + ", ".join([f"{x:.3f}" for x in act_vec]) + "]"
                     print(
                         f"[REWARD DEBUG call={self._debug_call_count}] "
-                        f"action_t [{act_min:.3f}, {act_max:.3f}] | "
-                        f"ctrl [{ctrl.min().item():.3f}, {ctrl.max().item():.3f}] | "
+                        f"shape={list(action_t.shape)} | "
+                        f"action_min/max=[{act_min:.3f}, {act_max:.3f}] | "
+                        f"action_vec={act_vec_str} | "
                         f"delta_max per sample: {delta_max.tolist()} | "
-                        f"non_finite={non_finite.tolist()} | "
-                        f"delta_invalid={delta_invalid.tolist()} | "
                         f"hard_invalid={hard_invalid.tolist()}"
                     )
                 else:

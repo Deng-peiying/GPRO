@@ -52,6 +52,7 @@ DA3_REPO_ROOT="${DA3_REPO_ROOT:-/root/autodl-tmp/dpy/myrepos/Depth-Anything-3-ma
 WAN_DEVICE="${WAN_DEVICE:-cuda:0}"
 DEPTH_DEVICE="${DEPTH_DEVICE:-cuda:1}"
 IDM_DEVICE="${IDM_DEVICE:-cuda:1}"
+REF_DEVICE="${REF_DEVICE:-cuda:1}"
 
 # ---- 训练超参数 ----
 STEPS="${STEPS:-1000}"
@@ -172,6 +173,7 @@ python -m algorithms.wan.run_state_unrolled_grpo \
   --wan-device "${WAN_DEVICE}" \
   --depth-device "${DEPTH_DEVICE}" \
   --idm-device "${IDM_DEVICE}" \
+  --ref-device "${REF_DEVICE}" \
   --disable-model-compile \
   --disable-clip-compile \
   --disable-vae-compile \
