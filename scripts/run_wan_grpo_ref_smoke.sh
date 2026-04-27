@@ -20,21 +20,21 @@ trap 'rc=$?; echo "[ERROR] ${BASH_SOURCE[0]} failed at line ${LINENO}: ${BASH_CO
 # Optional overrides:
 #   GROUP_SIZE=2 STEPS=20 LR=5e-6 source scripts/run_wan_grpo_ref_smoke.sh
 
-export PYTHONPATH="/root/autodl-tmp/repos/EVA-main:/root/autodl-tmp/repos/Depth-Anything-3-main/src:/root/autodl-tmp/repos/vidar:${PYTHONPATH:-}"
+export PYTHONPATH="/root/autodl-tmp/dpy/myrepos/EVA-main:/root/autodl-tmp/dpy/myrepos/Depth-Anything-3-main/src:/root/autodl-tmp/dpy/myrepos/vidar:${PYTHONPATH:-}"
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 export TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-1}"
 export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
 export PYTHONUNBUFFERED="${PYTHONUNBUFFERED:-1}"
 
-REPO_ROOT="${REPO_ROOT:-/root/autodl-tmp/repos/EVA-main}"
-CONFIG_PATH="${CONFIG_PATH:-/root/autodl-tmp/repos/EVA-main/configurations/algorithm/wan_i2v.yaml}"
-CONDITION_BANK="${CONDITION_BANK:-/root/autodl-tmp/wan_grpo_condition_bank.pt}"
-SAVE_DIR="${SAVE_DIR:-/root/autodl-tmp/grpo_smoke_ref}"
+REPO_ROOT="${REPO_ROOT:-/root/autodl-tmp/dpy/myrepos/EVA-main}"
+CONFIG_PATH="${CONFIG_PATH:-/root/autodl-tmp/dpy/myrepos/EVA-main/configurations/algorithm/wan_i2v.yaml}"
+CONDITION_BANK="${CONDITION_BANK:-/root/autodl-tmp/dpy/wan_grpo_condition_bank.pt}"
+SAVE_DIR="${SAVE_DIR:-/root/autodl-tmp/dpy/grpo_smoke_ref}"
 
-VIDAR_CKPT="${VIDAR_CKPT:-/root/autodl-tmp/models/vidar/vidar_model.pt}"
-DINO_DIR="${DINO_DIR:-/root/autodl-tmp/models/dinov2-with-registers-base}"
-DA3_DIR="${DA3_DIR:-/root/autodl-tmp/models/DA3-LARGE-1.1}"
-DA3_REPO_ROOT="${DA3_REPO_ROOT:-/root/autodl-tmp/repos/Depth-Anything-3-main}"
+VIDAR_CKPT="${VIDAR_CKPT:-/root/autodl-tmp/dpy/myrepos/vidar/vidar_model.pt}"
+DINO_DIR="${DINO_DIR:-/root/autodl-tmp/dpy/my_models/dinov2-with-registers-base}"
+DA3_DIR="${DA3_DIR:-/root/autodl-tmp/dpy/my_models/DA3-LARGE-1.1}"
+DA3_REPO_ROOT="${DA3_REPO_ROOT:-/root/autodl-tmp/dpy/myrepos/Depth-Anything-3-main}"
 
 WAN_DEVICE="${WAN_DEVICE:-cuda:0}"
 REF_DEVICE="${REF_DEVICE:-cuda:1}"

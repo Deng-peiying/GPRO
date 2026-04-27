@@ -107,10 +107,16 @@ class WanImageToVideo(WanTextToVideo):
 
         videos = batch["videos"]
         images = videos[:, :1]
+        batch_size, t, _, h, w = videos.shape
+
+        # Graceful defaults when condition bank lacks bbox fields
+        if "has_bbox" not in batch:
+            batch["has_bbox"] = torch.zeros(batch_size, 2, device=videos.device)
+        if "bbox_render" not in batch:
+            batch["bbox_render"] = torch.zeros(batch_size, 2, h, w, device=videos.device)
         has_bbox = batch["has_bbox"]  # [B, 2]
         bbox_render = batch["bbox_render"]  # [B, 2, H, W]
 
-        batch_size, t, _, h, w = videos.shape
         lat_c, lat_t, lat_h, lat_w = self.lat_c, self.lat_t, self.lat_h, self.lat_w
 
         clip_embeds = self.clip_features(images)

@@ -3,17 +3,17 @@ defaults:
   - _self_
 
 text_encoder:
-  ckpt_path: data/ckpts/Wan2.1-I2V-14B-480P/models_t5_umt5-xxl-enc-bf16.pth
+  ckpt_path: /root/autodl-tmp/dpy/my_models/Wan2.1-I2V-14B-480P/models_t5_umt5-xxl-enc-bf16.pth
 
 vae:
-  ckpt_path: data/ckpts/Wan2.1-I2V-14B-480P/Wan2.1_VAE.pth
+  ckpt_path: /root/autodl-tmp/dpy/my_models/Wan2.1-I2V-14B-480P/Wan2.1_VAE.pth
  
 clip:
-  ckpt_path: data/ckpts/Wan2.1-I2V-14B-480P/models_clip_open-clip-xlm-roberta-large-vit-huge-14.pth
+  ckpt_path: /root/autodl-tmp/dpy/my_models/Wan2.1-I2V-14B-480P/models_clip_open-clip-xlm-roberta-large-vit-huge-14.pth
   compile: true
 
 model:
-  ckpt_path: data/ckpts/Wan2.1-I2V-14B-480P
+  ckpt_path: /root/autodl-tmp/dpy/my_models/Wan2.1-I2V-14B-480P
   tuned_ckpt_path: null
 
   model_type: i2v

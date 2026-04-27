@@ -1,0 +1,60 @@
+Loading checkpoint shards:   0%|          | 0/7 [00:00<?, ?it/s]Loading checkpoint shards:  14%|█▍        | 1/7 [00:00<00:00,  7.77it/s]Loading checkpoint shards:  29%|██▊       | 2/7 [00:00<00:00,  7.52it/s]Loading checkpoint shards:  43%|████▎     | 3/7 [00:00<00:00,  7.89it/s]Loading checkpoint shards: 100%|██████████| 7/7 [00:00<00:00, 14.57it/s]
+trainable params: 32,768,000 || all params: 16,427,646,784 || trainable%: 0.1995
+MaskedIDM (shared-enc, per-frame mask) — output_dim=16, feat_rgb=512, dep=256, state=128, params=112,868,945
+[93m[WARN ] Dependency `gsplat` is required for rendering 3DGS. Install via: pip install git+https://github.com/nerfstudio-project/gsplat.git@0b4dddf04cb687367602c01196913cde6a743d70[0m
+[97m[INFO ] using MLP layer as FFN[0m
+Loading weights from local directory
+WARNING:py.warnings:/root/autodl-tmp/dpy/myrepos/EVA-main/algorithms/wan/modules/attention.py:128: UserWarning: flash-attn is not available, falling back to scaled_dot_product_attention.
+  warnings.warn(
+
+WARNING:py.warnings:/root/autodl-tmp/dpy/myrepos/EVA-main/algorithms/wan/modules/attention.py:132: UserWarning: Padding mask is disabled when using scaled_dot_product_attention. It can have a significant impact on performance.
+  warnings.warn(
+
+WARNING:py.warnings:/root/autodl-tmp/dpy/envs/eva/lib/python3.10/site-packages/torch/utils/checkpoint.py:237: UserWarning: None of the inputs have requires_grad=True. Gradients will be None
+  check_backward_validity(args)
+
+[97m[INFO ] Processed Images Done taking 0.02159905433654785 seconds. Shape:  torch.Size([1, 3, 378, 504])[0m
+[97m[INFO ] Model Forward Pass Done. Time: 0.15984320640563965 seconds[0m
+[97m[INFO ] Conversion to Prediction Done. Time: 0.0006506443023681641 seconds[0m
+[97m[INFO ] Processed Images Done taking 0.015172004699707031 seconds. Shape:  torch.Size([1, 3, 378, 504])[0m
+[97m[INFO ] Model Forward Pass Done. Time: 0.13384675979614258 seconds[0m
+[97m[INFO ] Conversion to Prediction Done. Time: 0.0004181861877441406 seconds[0m
+{"step": 1, "loss": 0.0, "policy_loss": 0.0, "kl_loss": 0.0, "mean_ratio": 0.9992499351501465, "mean_advantage": 0.0, "group_reward_mean": -0.08088658004999161, "group_reward_std": 0.0, "grad_norm": 0.0}
+[97m[INFO ] Processed Images Done taking 0.007715463638305664 seconds. Shape:  torch.Size([1, 3, 378, 504])[0m
+[97m[INFO ] Model Forward Pass Done. Time: 0.026497602462768555 seconds[0m
+[97m[INFO ] Conversion to Prediction Done. Time: 0.0008144378662109375 seconds[0m
+[97m[INFO ] Processed Images Done taking 0.010263204574584961 seconds. Shape:  torch.Size([1, 3, 378, 504])[0m
+[97m[INFO ] Model Forward Pass Done. Time: 0.026646852493286133 seconds[0m
+[97m[INFO ] Conversion to Prediction Done. Time: 0.0002429485321044922 seconds[0m
+{"step": 2, "loss": 0.0, "policy_loss": 0.0, "kl_loss": 0.0, "mean_ratio": 0.9989305734634399, "mean_advantage": 0.0, "group_reward_mean": -50.27806091308594, "group_reward_std": 0.0, "grad_norm": 0.0}
+[97m[INFO ] Processed Images Done taking 0.02372288703918457 seconds. Shape:  torch.Size([1, 3, 378, 504])[0m
+[97m[INFO ] Model Forward Pass Done. Time: 0.026626110076904297 seconds[0m
+[97m[INFO ] Conversion to Prediction Done. Time: 0.0002484321594238281 seconds[0m
+[97m[INFO ] Processed Images Done taking 0.007563352584838867 seconds. Shape:  torch.Size([1, 3, 378, 504])[0m
+[97m[INFO ] Model Forward Pass Done. Time: 0.029201030731201172 seconds[0m
+[97m[INFO ] Conversion to Prediction Done. Time: 0.00024890899658203125 seconds[0m
+{"step": 3, "loss": 0.0, "policy_loss": 0.0, "kl_loss": 0.0, "mean_ratio": 0.9990680813789368, "mean_advantage": 0.0, "group_reward_mean": -100.3301773071289, "group_reward_std": 0.0, "grad_norm": 0.0}
+[97m[INFO ] Processed Images Done taking 0.009121417999267578 seconds. Shape:  torch.Size([1, 3, 378, 504])[0m
+[97m[INFO ] Model Forward Pass Done. Time: 0.026137828826904297 seconds[0m
+[97m[INFO ] Conversion to Prediction Done. Time: 0.00026154518127441406 seconds[0m
+[97m[INFO ] Processed Images Done taking 0.00996088981628418 seconds. Shape:  torch.Size([1, 3, 378, 504])[0m
+[97m[INFO ] Model Forward Pass Done. Time: 0.02929401397705078 seconds[0m
+[97m[INFO ] Conversion to Prediction Done. Time: 0.00025534629821777344 seconds[0m
+{"step": 4, "loss": 0.0, "policy_loss": 0.0, "kl_loss": 0.0, "mean_ratio": 0.9988611340522766, "mean_advantage": 0.0, "group_reward_mean": -100.33732604980469, "group_reward_std": 0.0, "grad_norm": 0.0}
+[97m[INFO ] Processed Images Done taking 0.011303424835205078 seconds. Shape:  torch.Size([1, 3, 378, 504])[0m
+[97m[INFO ] Model Forward Pass Done. Time: 0.02863907814025879 seconds[0m
+[97m[INFO ] Conversion to Prediction Done. Time: 0.00055694580078125 seconds[0m
+[97m[INFO ] Processed Images Done taking 0.008770227432250977 seconds. Shape:  torch.Size([1, 3, 378, 504])[0m
+[97m[INFO ] Model Forward Pass Done. Time: 0.026799440383911133 seconds[0m
+[97m[INFO ] Conversion to Prediction Done. Time: 0.00024199485778808594 seconds[0m
+{"step": 5, "loss": 0.0, "policy_loss": 0.0, "kl_loss": 0.0, "mean_ratio": 0.9991253018379211, "mean_advantage": 0.0, "group_reward_mean": -50.32784652709961, "group_reward_std": 0.0, "grad_norm": 0.0}
+[97m[INFO ] Processed Images Done taking 0.010303258895874023 seconds. Shape:  torch.Size([1, 3, 378, 504])[0m
+[97m[INFO ] Model Forward Pass Done. Time: 0.02638101577758789 seconds[0m
+[97m[INFO ] Conversion to Prediction Done. Time: 0.0002570152282714844 seconds[0m
+[97m[INFO ] Processed Images Done taking 0.00685572624206543 seconds. Shape:  torch.Size([1, 3, 378, 504])[0m
+[97m[INFO ] Model Forward Pass Done. Time: 0.03434610366821289 seconds[0m
+[97m[INFO ] Conversion to Prediction Done. Time: 0.0003342628479003906 seconds[0m
+{"step": 6, "loss": 0.0, "policy_loss": 0.0, "kl_loss": 0.0, "mean_ratio": 0.9989203214645386, "mean_advantage": 0.0, "group_reward_mean": -50.363990783691406, "group_reward_std": 0.0, "grad_norm": 0.0}
+[97m[INFO ] Processed Images Done taking 0.011838197708129883 seconds. Shape:  torch.Size([1, 3, 378, 504])[0m
+[97m[INFO ] Model Forward Pass Done. Time: 0.03071904182434082 seconds[0m
+[97m[INFO ] Conversion to Prediction Done. Time: 0.00046634674072265625 seconds[0m

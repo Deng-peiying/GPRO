@@ -284,6 +284,18 @@ def main():
     depth_device = torch.device(args.depth_device if args.depth_device is not None else wan_device)
     idm_device = torch.device(args.idm_device if args.idm_device is not None else wan_device)
 
+    # Ensure VAE, CLIP, and Text Encoder are assigned to specific devices
+    vae_device = torch.device(args.depth_device if args.depth_device is not None else "cuda:1")
+    clip_device = torch.device(args.depth_device if args.depth_device is not None else "cuda:1")
+    text_encoder_device = torch.device(args.depth_device if args.depth_device is not None else "cuda:1")
+
+    if cfg.get("vae") is not None:
+        cfg.vae.device = str(vae_device)
+    if cfg.get("clip") is not None:
+        cfg.clip.device = str(clip_device)
+    if cfg.get("text_encoder") is not None:
+        cfg.text_encoder.device = str(text_encoder_device)
+
     policy_algo = build_algo(cfg).to(wan_device)
     ref_algo = None
     if args.use_reference_model:
