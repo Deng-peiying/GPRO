@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+# 减少显存碎片，避免因碎片化导致 OOM
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
+
 if [[ "${DEBUG_SHELL:-0}" == "1" ]]; then
   set -x
 fi
@@ -81,14 +84,13 @@ LORA_ALPHA="${LORA_ALPHA:-32}"
 LORA_DROPOUT="${LORA_DROPOUT:-0.0}"
 GRADIENT_CHECKPOINTING_RATE="${GRADIENT_CHECKPOINTING_RATE:-1.0}"
 
-# ---- 分辨率覆盖（可选，留空则使用 YAML 中的完整分辨率 480x640 49帧）----
-# ★ 96GB 单卡跑全分辨率会 OOM，建议先从小分辨率开始验证：
-#   OVERRIDE_HEIGHT=320 OVERRIDE_WIDTH=480 OVERRIDE_N_FRAMES=17 OVERRIDE_SAMPLE_STEPS=10 bash ...
-# 不设置 / 留空则不传 override 参数（使用 YAML 原始配置）
-OVERRIDE_HEIGHT="${OVERRIDE_HEIGHT:-}"
-OVERRIDE_WIDTH="${OVERRIDE_WIDTH:-}"
-OVERRIDE_N_FRAMES="${OVERRIDE_N_FRAMES:-}"
-OVERRIDE_SAMPLE_STEPS="${OVERRIDE_SAMPLE_STEPS:-}"
+# ---- 分辨率覆盖（适配 96GB 单卡）----
+# 14B 模型在全分辨率 (480x640x49帧) 下单次 forward+backward 就会超 96GB
+# 320x480x17帧 是论文推荐的训练分辨率，显存约 40-50GB，足够 96GB 安全运行
+OVERRIDE_HEIGHT="${OVERRIDE_HEIGHT:-320}"
+OVERRIDE_WIDTH="${OVERRIDE_WIDTH:-480}"
+OVERRIDE_N_FRAMES="${OVERRIDE_N_FRAMES:-17}"
+OVERRIDE_SAMPLE_STEPS="${OVERRIDE_SAMPLE_STEPS:-10}"
 
 # ---- Reward 权重 ----
 HARD_VETO_PENALTY="${HARD_VETO_PENALTY:-50.0}"
@@ -129,8 +131,9 @@ echo " Steps:          ${STEPS}"
 echo " Group Size:     ${GROUP_SIZE}"
 echo " Horizon Steps:  ${HORIZON_STEPS}"
 echo " LR:             ${LR}"
+echo " Resolution:     ${OVERRIDE_HEIGHT}x${OVERRIDE_WIDTH}, ${OVERRIDE_N_FRAMES} frames, ${OVERRIDE_SAMPLE_STEPS} denoise steps"
+echo " Inner Epochs:   ${NUM_INNER_EPOCHS}"
 echo " Discount Gamma: ${DISCOUNT_GAMMA}"
-echo " LoRA Rank:      ${LORA_RANK}"
 echo " --- GPU 分配 ---"
 echo " WAN Model:      ${WAN_DEVICE}"
 echo " Depth Model:    ${DEPTH_DEVICE}"

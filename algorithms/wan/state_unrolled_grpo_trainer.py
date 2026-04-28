@@ -17,6 +17,51 @@ from .state_unrolled_grpo_objective import (
 )
 
 
+# ---------------------------------------------------------------------------
+# GPU → CPU offloading helpers
+# ---------------------------------------------------------------------------
+
+def _tensor_to_cpu(t):
+    """Move a tensor to CPU if it is on GPU (in-place field replacement)."""
+    if isinstance(t, torch.Tensor) and t.is_cuda:
+        return t.detach().cpu()
+    return t
+
+
+def _offload_rollouts_to_cpu(rollout_groups) -> None:
+    """Move large rollout tensors to CPU to free GPU memory for backward pass.
+
+    After this, each trace's ``latent_path``, ``old_flow_preds``,
+    ``decoded_video``, ``hist_noise_path`` etc. live on CPU.  The training
+    loop moves them back to the target device on-the-fly.
+    """
+    for group in rollout_groups:
+        for trace in group.traces:
+            # cumulative_reward is small – keep on GPU for fast advantage calc
+            trace.cumulative_reward = _tensor_to_cpu(trace.cumulative_reward)
+            # StateUnrolledTrace has .transitions
+            if hasattr(trace, "transitions"):
+                for trans in trace.transitions:
+                    rt = trans.rollout_trace
+                    rt.latent_path = [_tensor_to_cpu(x) for x in rt.latent_path]
+                    rt.old_flow_preds = [_tensor_to_cpu(x) for x in rt.old_flow_preds]
+                    rt.decoded_video = _tensor_to_cpu(rt.decoded_video)
+                    if rt.hist_noise_path is not None:
+                        rt.hist_noise_path = [
+                            _tensor_to_cpu(x) if x is not None else None
+                            for x in rt.hist_noise_path
+                        ]
+                    rt.logp_old = _tensor_to_cpu(rt.logp_old)
+                    # step_cond tensors
+                    if hasattr(trans, "step_cond") and isinstance(trans.step_cond, dict):
+                        for k, v in trans.step_cond.items():
+                            if isinstance(v, torch.Tensor) and v.is_cuda:
+                                trans.step_cond[k] = v.detach().cpu()
+    # Force CUDA to reclaim freed memory
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+
 @dataclass
 class StateUnrolledGRPOTrainerConfig:
     group_size: int = 4
@@ -95,6 +140,9 @@ class StateUnrolledGRPOTrainer:
             flow_logprob_sigma=self.cfg.surrogate_sigma,
             discount_gamma=self.cfg.discount_gamma,
         )
+
+        # ── 1b. CPU-offload rollout tensors to free GPU memory for backward ──
+        _offload_rollouts_to_cpu(rollout_groups)
 
         grpo_cfg = StateUnrolledGRPOConfig(
             clip_eps=self.cfg.clip_eps,
