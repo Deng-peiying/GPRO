@@ -15,7 +15,7 @@ trap 'rc=$?; echo "[ERROR] ${BASH_SOURCE[0]} failed at line ${LINENO}: ${BASH_CO
 # ============================================================================
 #
 # 与 smoke test 脚本的区别：
-#   1. 不使用 --override-height/width/n-frames/sample-steps（使用 YAML 中的完整分辨率 480x640, 49帧）
+#   1. 默认使用 320x480x17帧 低分辨率（适配 96GB 单卡），可通过环境变量覆盖
 #   2. 训练步数更多（默认 1000 步）
 #   3. 超参数为正式训练推荐值
 #
@@ -34,7 +34,7 @@ trap 'rc=$?; echo "[ERROR] ${BASH_SOURCE[0]} failed at line ${LINENO}: ${BASH_CO
 
 # ---- 环境变量 ----
 export PYTHONPATH="/root/autodl-tmp/dpy/myrepos/EVA-main:/root/autodl-tmp/dpy/myrepos/Depth-Anything-3-main/src:/root/autodl-tmp/dpy/myrepos/vidar:${PYTHONPATH:-}"
-export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
+# note: PYTORCH_CUDA_ALLOC_CONF already exported at script top
 export TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-1}"
 export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
 export PYTHONUNBUFFERED="${PYTHONUNBUFFERED:-1}"

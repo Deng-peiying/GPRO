@@ -33,15 +33,16 @@ def _offload_rollouts_to_cpu(rollout_groups) -> None:
 
     After this, each trace's ``latent_path``, ``old_flow_preds``,
     ``decoded_video``, ``hist_noise_path`` etc. live on CPU.  The training
-    loop moves them back to the target device on-the-fly.
+    loop moves them back to the target device on-the-fly via ``.to(device)``.
     """
     for group in rollout_groups:
         for trace in group.traces:
-            # cumulative_reward is small – keep on GPU for fast advantage calc
+            # cumulative_reward is small scalar – keep wherever it is
             trace.cumulative_reward = _tensor_to_cpu(trace.cumulative_reward)
             # StateUnrolledTrace has .transitions
             if hasattr(trace, "transitions"):
                 for trans in trace.transitions:
+                    # ---- RolloutTrace inside transition (big latent tensors) ----
                     rt = trans.rollout_trace
                     rt.latent_path = [_tensor_to_cpu(x) for x in rt.latent_path]
                     rt.old_flow_preds = [_tensor_to_cpu(x) for x in rt.old_flow_preds]
@@ -52,7 +53,25 @@ def _offload_rollouts_to_cpu(rollout_groups) -> None:
                             for x in rt.hist_noise_path
                         ]
                     rt.logp_old = _tensor_to_cpu(rt.logp_old)
-                    # step_cond tensors
+                    rt.timesteps = [_tensor_to_cpu(x) for x in rt.timesteps]
+                    # cond dict may have tensor values
+                    if isinstance(rt.cond, dict):
+                        for k, v in rt.cond.items():
+                            if isinstance(v, torch.Tensor) and v.is_cuda:
+                                rt.cond[k] = v.detach().cpu()
+
+                    # ---- StepTransition fields (images, not needed during training) ----
+                    trans.current_rgb = _tensor_to_cpu(trans.current_rgb)
+                    trans.current_depth = _tensor_to_cpu(trans.current_depth)
+                    trans.next_rgb = _tensor_to_cpu(trans.next_rgb)
+                    trans.next_depth = _tensor_to_cpu(trans.next_depth)
+                    trans.action_t = _tensor_to_cpu(trans.action_t)
+                    trans.reward_t = _tensor_to_cpu(trans.reward_t)
+                    trans.training_mask_t = _tensor_to_cpu(trans.training_mask_t)
+                    trans.control_state_t = _tensor_to_cpu(trans.control_state_t)
+                    trans.control_state_t1 = _tensor_to_cpu(trans.control_state_t1)
+
+                    # ---- step_cond dict tensors ----
                     if hasattr(trans, "step_cond") and isinstance(trans.step_cond, dict):
                         for k, v in trans.step_cond.items():
                             if isinstance(v, torch.Tensor) and v.is_cuda:
