@@ -96,9 +96,9 @@ class WanImageToVideo(WanTextToVideo):
             videos, size=size, mode="bicubic", align_corners=False
         )
         videos = self.clip_normalize(videos.mul_(0.5).add_(0.5))
-        # Ensure videos match CLIP parameters dtype
-        target_dtype = next(self.clip.parameters()).dtype
-        videos = videos.to(dtype=target_dtype)
+        # Ensure videos match CLIP parameters device and dtype
+        clip_param = next(self.clip.parameters())
+        videos = videos.to(device=clip_param.device, dtype=clip_param.dtype)
         return self.clip.visual(videos, use_31_block=True)
 
     @torch.no_grad()

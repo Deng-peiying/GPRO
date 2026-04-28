@@ -40,15 +40,18 @@ def _recompute_flow_predictions(
     prompt_embeds = batch["prompt_embeds"]
     video_lat = batch["video_lat"]
 
+    # Move all batch tensors to the model device (DiT) AND ensure correct dtype.
+    # This is critical when VAE/CLIP/TextEncoder live on a different GPU.
+    model_device = algo.model.patch_embedding.weight.device
     target_dtype = algo.model.patch_embedding.weight.dtype
-    if video_lat.dtype != target_dtype:
-        video_lat = video_lat.to(target_dtype)
-    if clip_embeds is not None and clip_embeds.dtype != target_dtype:
-        clip_embeds = clip_embeds.to(target_dtype)
-    if image_embeds is not None and image_embeds.dtype != target_dtype:
-        image_embeds = image_embeds.to(target_dtype)
+    if video_lat.device != model_device or video_lat.dtype != target_dtype:
+        video_lat = video_lat.to(device=model_device, dtype=target_dtype)
+    if clip_embeds is not None and (clip_embeds.device != model_device or clip_embeds.dtype != target_dtype):
+        clip_embeds = clip_embeds.to(device=model_device, dtype=target_dtype)
+    if image_embeds is not None and (image_embeds.device != model_device or image_embeds.dtype != target_dtype):
+        image_embeds = image_embeds.to(device=model_device, dtype=target_dtype)
     if prompt_embeds is not None:
-        prompt_embeds = [u.to(target_dtype) if u.dtype != target_dtype else u for u in prompt_embeds]
+        prompt_embeds = [u.to(device=model_device, dtype=target_dtype) for u in prompt_embeds]
 
     hist_len = int(trace.cond.get("hist_len", 1))
     hist_len_lat = (hist_len - 1) // algo.vae_stride[0] + 1

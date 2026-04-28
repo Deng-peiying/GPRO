@@ -403,15 +403,18 @@ class WanTextToVideo(BasePytorchAlgo):
 
     def encode_video(self, videos):
         """videos: [B, C, T, H, W]"""
-        # Ensure videos match VAE dtype (likely bfloat16)
+        # Ensure videos match VAE device and dtype (VAE may live on a different GPU)
         if hasattr(self, 'vae') and hasattr(self.vae, 'parameters'):
-             target_dtype = next(self.vae.parameters()).dtype
-             videos = videos.to(dtype=target_dtype)
+             vae_param = next(self.vae.parameters())
+             videos = videos.to(device=vae_param.device, dtype=vae_param.dtype)
         vae_scale = [self.vae_mean, self.vae_inv_std]
         return self.vae.encode(videos, vae_scale)
 
     def decode_video(self, zs):
-        # Ensure scale is in the same dtype as zs to avoid implicit casting to float32 if scale is float32
+        # Ensure latents match VAE device and dtype
+        if hasattr(self, 'vae') and hasattr(self.vae, 'parameters'):
+            vae_param = next(self.vae.parameters())
+            zs = zs.to(device=vae_param.device, dtype=vae_param.dtype)
         scale = [self.vae_mean.to(zs.dtype), self.vae_inv_std.to(zs.dtype)]
         return self.vae.decode(zs, scale).clamp_(-1, 1)
 

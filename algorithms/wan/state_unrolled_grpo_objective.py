@@ -30,6 +30,9 @@ class StateUnrolledGRPOLoss:
 
 
 def _algo_device(algo) -> torch.device:
+    """Return the device of the main DiT model (not auxiliary sub-models like VAE/CLIP)."""
+    if hasattr(algo, "model") and hasattr(algo.model, "parameters"):
+        return next(algo.model.parameters()).device
     return next(algo.parameters()).device
 
 

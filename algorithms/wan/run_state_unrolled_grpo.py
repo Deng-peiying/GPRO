@@ -286,22 +286,64 @@ def main():
     depth_device = torch.device(args.depth_device if args.depth_device is not None else wan_device)
     idm_device = torch.device(args.idm_device if args.idm_device is not None else wan_device)
 
-    # Ensure VAE, CLIP, and Text Encoder are assigned to specific devices
-    vae_device = torch.device(args.depth_device if args.depth_device is not None else "cuda:1")
-    clip_device = torch.device(args.depth_device if args.depth_device is not None else "cuda:1")
-    text_encoder_device = torch.device(args.depth_device if args.depth_device is not None else "cuda:1")
-
-    if cfg.get("vae") is not None:
-        cfg.vae.device = str(vae_device)
-    if cfg.get("clip") is not None:
-        cfg.clip.device = str(clip_device)
-    if cfg.get("text_encoder") is not None:
-        cfg.text_encoder.device = str(text_encoder_device)
+    # Ensure VAE, CLIP, and Text Encoder are assigned to the auxiliary GPU,
+    # NOT the training GPU.  build_algo(cfg).to(wan_device) moves everything
+    # to cuda:0 which overflows.  We explicitly relocate sub-models afterwards.
+    aux_device = torch.device(args.depth_device if args.depth_device is not None else "cuda:1")
 
     policy_algo = build_algo(cfg).to(wan_device)
+
+    # ── Move heavy auxiliary sub-models OFF cuda:0 to free ~29 GB ──────────
+    #    DiT (14B, bf16 ≈ 28 GB) stays on cuda:0 for training.
+    #    UMT5-XXL (≈ 26 GB) + CLIP (≈ 2 GB) + VAE (≈ 1 GB) → aux GPU.
+    if aux_device != wan_device:
+        if hasattr(policy_algo, "text_encoder") and policy_algo.text_encoder is not None:
+            policy_algo.text_encoder = policy_algo.text_encoder.to(aux_device)
+            print(f"[DEVICE] text_encoder → {aux_device}")
+        if hasattr(policy_algo, "clip") and policy_algo.clip is not None:
+            policy_algo.clip = policy_algo.clip.to(aux_device)
+            print(f"[DEVICE] clip → {aux_device}")
+        if hasattr(policy_algo, "vae") and policy_algo.vae is not None:
+            policy_algo.vae = policy_algo.vae.to(aux_device)
+            # Also move VAE-related buffers
+            if hasattr(policy_algo, "vae_mean"):
+                policy_algo.vae_mean = policy_algo.vae_mean.to(aux_device)
+            if hasattr(policy_algo, "vae_inv_std"):
+                policy_algo.vae_inv_std = policy_algo.vae_inv_std.to(aux_device)
+            print(f"[DEVICE] vae → {aux_device}")
+
+        # Override self.device so that it returns wan_device (cuda:0) instead of
+        # following the first registered parameter (text_encoder, now on cuda:1).
+        # PyTorch Lightning / nn.Module use this property for tensor creation.
+        policy_algo.__class__ = type(
+            policy_algo.__class__.__name__,
+            (policy_algo.__class__,),
+            {"device": property(lambda self: wan_device)},
+        )
+
+        torch.cuda.empty_cache()
+        _alloc_gb = torch.cuda.memory_allocated(wan_device) / 1024**3
+        print(f"[DEVICE] cuda:0 allocated after offload: {_alloc_gb:.1f} GB")
+
     ref_algo = None
     if args.use_reference_model:
         ref_algo = copy.deepcopy(policy_algo).to(ref_device)
+        # Share frozen sub-models with policy to save GPU memory
+        if aux_device != wan_device:
+            ref_algo.vae = policy_algo.vae
+            ref_algo.clip = policy_algo.clip
+            ref_algo.text_encoder = policy_algo.text_encoder
+            ref_algo.tokenizer = policy_algo.tokenizer
+            if hasattr(policy_algo, "vae_mean"):
+                ref_algo.vae_mean = policy_algo.vae_mean
+            if hasattr(policy_algo, "vae_inv_std"):
+                ref_algo.vae_inv_std = policy_algo.vae_inv_std
+            # Override device property for ref_algo too
+            ref_algo.__class__ = type(
+                ref_algo.__class__.__name__,
+                (ref_algo.__class__,),
+                {"device": property(lambda self: ref_device)},
+            )
         ref_algo.eval()
         for param in ref_algo.parameters():
             param.requires_grad_(False)
