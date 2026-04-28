@@ -565,6 +565,7 @@ class WanModel(ModelMixin, ConfigMixin):
             self.freqs = self.freqs.to(device)
 
         if y is not None:
+            x = [u.to(device=device) for u in x]
             y = [v.to(device=device) for v in y]
             x = [torch.cat([u, v], dim=0) for u, v in zip(x, y)]
 
@@ -638,6 +639,7 @@ class WanModel(ModelMixin, ConfigMixin):
         context = self.text_embedding(context)  # [B, text_len, dim]
 
         if clip_fea is not None:
+            clip_fea = clip_fea.to(device=device)
             context_clip = self.img_emb(clip_fea)  # bs x 257 x dim
             context = torch.concat([context_clip, context], dim=1)
 
