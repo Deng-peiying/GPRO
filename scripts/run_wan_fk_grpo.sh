@@ -40,6 +40,13 @@ GRAD_CLIP_NORM="${GRAD_CLIP_NORM:-1.0}"
 REF_UPDATE_INTERVAL="${REF_UPDATE_INTERVAL:-0}"
 DISCOUNT_GAMMA="${DISCOUNT_GAMMA:-1.0}"
 
+# Video shape. The default condition bank is the triple-camera layout:
+# head 640x480 + left/right 320x240 below -> 640x720, full horizon 49 frames.
+N_FRAMES="${N_FRAMES:-49}"
+HEIGHT="${HEIGHT:-720}"
+WIDTH="${WIDTH:-640}"
+SAMPLE_STEPS="${SAMPLE_STEPS:-40}"
+
 # FK reward weights
 FK_WEIGHT="${FK_WEIGHT:-0.5}"
 FK_WS_WEIGHT="${FK_WS_WEIGHT:-1.0}"
@@ -55,6 +62,7 @@ echo "Condition bank: $CONDITION_BANK"
 echo "FK URDF: $FK_URDF"
 echo "Save dir: $SAVE_DIR"
 echo "Devices: WAN=$WAN_DEVICE REF=$REF_DEVICE DEPTH=$DEPTH_DEVICE IDM=$IDM_DEVICE"
+echo "Video shape: ${N_FRAMES} frames @ ${WIDTH}x${HEIGHT}, sample_steps=$SAMPLE_STEPS"
 
 python -m algorithms.wan.run_state_unrolled_grpo \
     --config "$WAN_CONFIG" \
@@ -80,6 +88,10 @@ python -m algorithms.wan.run_state_unrolled_grpo \
     --hist-len "$HIST_LEN" \
     --steps "$GRPO_STEPS" \
     --save-interval "$SAVE_INTERVAL" \
+    --override-n-frames "$N_FRAMES" \
+    --override-height "$HEIGHT" \
+    --override-width "$WIDTH" \
+    --override-sample-steps "$SAMPLE_STEPS" \
     --lr "$LR" \
     --num-inner-epochs "$NUM_INNER_EPOCHS" \
     --clip-eps "$CLIP_EPS" \
