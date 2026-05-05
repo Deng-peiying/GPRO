@@ -1,0 +1,8 @@
+defaults:
+  - robotwin_sft_vanilla
+  - _self_
+
+# Same as vanilla but points to arm-entry filtered data
+# n_frames set lower for entry-focused training
+data_root: ??? # e.g. /home/zhangmohan/data/robotwin_sft_entry
+n_frames: 17

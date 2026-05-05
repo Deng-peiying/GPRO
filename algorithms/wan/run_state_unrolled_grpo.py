@@ -13,6 +13,7 @@ from omegaconf import OmegaConf, open_dict
 
 from .depth_backends import build_depth_backend
 from .idm_backends import build_idm_backend
+from .fk_reward import FKExecutabilityComponents, FKRewardConfig, build_franka_fk
 from .run_single_step_replan import adapt_condition_batch
 from .state_action_reward import StepExecutabilityReward
 from .state_unrolled_grpo_trainer import StateUnrolledGRPOTrainer, StateUnrolledGRPOTrainerConfig
@@ -87,6 +88,8 @@ def apply_runtime_overrides(cfg, args):
             cfg.n_frames = int(args.override_n_frames)
         if args.override_sample_steps is not None:
             cfg.sample_steps = int(args.override_sample_steps)
+        if args.tuned_ckpt is not None:
+            cfg.model.tuned_ckpt_path = args.tuned_ckpt
         cfg.force_training = True
         cfg.model.use_lora = True
         cfg.model.lora_rank = int(args.lora_rank)
@@ -208,6 +211,7 @@ def main():
     parser.add_argument("--config", required=True)
     parser.add_argument("--condition-bank", required=True)
     parser.add_argument("--save-dir", required=True)
+    parser.add_argument("--tuned-ckpt", default=None, help="Optional SFT checkpoint used to initialize the Wan policy.")
     parser.add_argument("--steps", type=int, default=1000)
     parser.add_argument("--log-interval", type=int, default=10)
     parser.add_argument("--save-interval", type=int, default=100)
@@ -264,6 +268,15 @@ def main():
     parser.add_argument("--idm-stability-weight", type=float, default=0.25)
     parser.add_argument("--transition-stability-weight", type=float, default=0.25)
     parser.add_argument("--dof-weights", default=None, help="Comma-separated per-DoF weights, e.g. 1,1,1,1,1,1,1,2,1,1,1,1,1,1,1,2")
+    # ── FK reward arguments ──────────────────────────────────────────────
+    parser.add_argument("--fk-urdf", default=None, help="Path to Franka Panda URDF file")
+    parser.add_argument("--fk-weight", type=float, default=1.0, help="Overall FK reward contribution weight")
+    parser.add_argument("--fk-ws-weight", type=float, default=0.5)
+    parser.add_argument("--fk-singularity-weight", type=float, default=0.1)
+    parser.add_argument("--fk-ee-vel-weight", type=float, default=0.5)
+    parser.add_argument("--fk-ee-acc-weight", type=float, default=0.25)
+    parser.add_argument("--fk-chain-weight", type=float, default=0.5)
+    parser.add_argument("--fk-dual-arm-weight", type=float, default=0.5)
     parser.add_argument("--override-height", type=int, default=None)
     parser.add_argument("--override-width", type=int, default=None)
     parser.add_argument("--override-n-frames", type=int, default=None)
@@ -331,7 +344,7 @@ def main():
         use_ray_pose=args.da3_use_ray_pose,
         ref_view_strategy=args.da3_ref_view_strategy,
     )
-    reward_model = StepExecutabilityReward(
+    reward_kwargs = dict(
         action_dim=args.idm_target_action_dim,
         dof_weights=parse_optional_float_list(args.dof_weights),
         hard_veto_penalty=args.hard_veto_penalty,
@@ -340,6 +353,34 @@ def main():
         action_recovery_weight=args.action_recovery_weight,
         idm_stability_weight=args.idm_stability_weight,
         transition_stability_weight=args.transition_stability_weight,
+        fk_weight=args.fk_weight,
+    )
+
+    # ── Build FK reward components (if URDF provided) ─────────────────
+    fk_components = None
+    if args.fk_urdf is not None:
+        fk_model = build_franka_fk(
+            args.fk_urdf,
+            device=wan_device,
+            backend="pytorch_kinematics",
+        )
+        fk_cfg = FKRewardConfig(
+            ws_weight=args.fk_ws_weight,
+            singularity_weight=args.fk_singularity_weight,
+            ee_vel_weight=args.fk_ee_vel_weight,
+            ee_acc_weight=args.fk_ee_acc_weight,
+            fk_chain_weight=args.fk_chain_weight,
+            dual_arm_weight=args.fk_dual_arm_weight,
+            fk_enabled=True,
+        )
+        fk_components = FKExecutabilityComponents(fk_model, fk_cfg)
+        print(f"[FK] Loaded Franka FK from {args.fk_urdf}")
+    else:
+        print("[FK] No URDF provided — FK reward components disabled")
+
+    reward_model = StepExecutabilityReward(
+        fk_components=fk_components,
+        **reward_kwargs,
     )
 
     trainer = StateUnrolledGRPOTrainer(

@@ -3,7 +3,7 @@ from torch.distributed.fsdp import MixedPrecision
 from torch.distributed.fsdp.wrap import ModuleWrapPolicy
 
 from algorithms.wan import WanImageToVideo, WanTextToVideo
-from datasets.video_base import SingleFrameVideoDataset
+from datasets.video_base import SingleFrameVideoDataset, VideoDataset
 from .exp_base import BaseLightningExperiment
 
 
@@ -21,6 +21,10 @@ class VideoPredictionExperiment(BaseLightningExperiment):
     compatible_datasets = dict(
         image_csv=SingleFrameVideoDataset,
         ours_test=SingleFrameVideoDataset,
+        robotwin_sft=VideoDataset,
+        robotwin_sft_vanilla=VideoDataset,
+        robotwin_sft_entry=VideoDataset,
+        robotwin_sft_full=VideoDataset,
     )
 
     def _build_strategy(self):

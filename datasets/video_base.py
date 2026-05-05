@@ -123,12 +123,29 @@ class VideoDataset(Dataset):
     def __len__(self) -> int:
         return len(self.records)
 
+    def _frame_to_latent_idx(self, frame_idx: int) -> int:
+        """Map frame index to VAE latent temporal index (stride=4, causal)."""
+        if frame_idx <= 0:
+            return 0
+        return 1 + (frame_idx - 1) // 4
+
+    def _get_temporal_indices(self, record: Dict[str, Any]):
+        """Compute temporal frame indices for a record, returns (indices, target_len)."""
+        video_path = self.data_root / record["video_path"]
+        video_reader = decord.VideoReader(uri=video_path.as_posix())
+        n_frames = len(video_reader)
+        start = record.get("trim_start", 0)
+        end = record.get("trim_end", n_frames)
+        indices = self._temporal_sample(end - start, record["fps"])
+        indices = list(start + indices)
+        return indices, n_frames
+
     def __getitem__(self, idx: Any) -> Dict[str, Any]:
         # Handle tuple index from DistributedKRepeatSampler for GRPO deterministic sampling
         seed = None
         if isinstance(idx, (tuple, list)):
             seed, idx = idx
-        
+
         record = self.records[idx]
 
         # Context manager for temporary random seed
@@ -144,9 +161,11 @@ class VideoDataset(Dataset):
                 np.random.seed(int(seed) % (2**32))
 
         try:
-            # Load video data - either raw or preprocessed latents
-            videos = self._load_video(record)
-            # images = videos[:1].clone() if self.image_to_video else None
+            # Compute temporal indices once (shared by video + latent paths)
+            frame_indices, n_frames_total = self._get_temporal_indices(record)
+
+            # Load video data
+            videos = self._load_video_with_indices(record, frame_indices)
             image_latents, video_latents = None, None
             video_metadata = {
                 "num_frames": videos.shape[0],
@@ -155,24 +174,22 @@ class VideoDataset(Dataset):
             }
 
             if self.load_video_latent:
-                image_latents, video_latents = self._load_video_latent(record)
-                # This is hardcoded for now.
-                # The VAE's temporal compression ratio is 4.
-                # The VAE's spatial compression ratio is 8.
-                latent_num_frames = video_latents.size(1)
-                if latent_num_frames % 2 == 0:
-                    n_frames = latent_num_frames * 4
-                else:
-                    n_frames = (latent_num_frames - 1) * 4 + 1
+                expected_t = 1 + (videos.shape[0] - 1) // 4
+                video_latents = self._load_video_latent_slice(record, frame_indices, expected_t)
+                latent_t = video_latents.size(1)
+                if latent_t < expected_t:
+                    # Pad latent to expected temporal length
+                    pad = video_latents[:, -1:] + (video_latents[:, -1:] - video_latents[:, -2:-1])
+                    pad = torch.cat([pad] * (expected_t - latent_t), dim=1)
+                    video_latents = torch.cat([video_latents, pad], dim=1)
 
-                height = video_latents.size(2) * 8
-                width = video_latents.size(3) * 8
+                image_latent_path = record.get("image_latent_path", None)
+                if image_latent_path and self.image_to_video:
+                    image_latents = torch.load(
+                        self.data_root / image_latent_path, map_location="cpu", weights_only=True
+                    )
 
-                assert video_metadata["num_frames"] == n_frames, "num_frames changed"
-                assert video_metadata["height"] == height, "height changed"
-                assert video_metadata["width"] == width, "width changed"
-
-            # Load prompt data - either raw or preprocessed embeddings
+            # Load prompt data
             caption = record.get("caption", "")
             video_metadata["has_caption"] = caption != ""
             prompts = self.id_token + caption
@@ -193,8 +210,6 @@ class VideoDataset(Dataset):
 
             if prompts is not None:
                 output["prompts"] = prompts
-            # if images is not None:
-            #     output["images"] = images
             if prompt_embeds is not None:
                 output["prompt_embeds"] = prompt_embeds
                 output["prompt_embed_len"] = prompt_embed_len
@@ -262,26 +277,21 @@ class VideoDataset(Dataset):
         return indices
 
     def _load_video(self, record: Dict[str, Any]) -> torch.Tensor:
-        """
-        Given a record, return a tensor of shape (n_frames, 3, H, W)
-        """
+        """Given a record, return a tensor of shape (n_frames, 3, H, W)."""
+        frame_indices, _ = self._get_temporal_indices(record)
+        return self._load_video_with_indices(record, frame_indices)
 
+    def _load_video_with_indices(self, record: Dict[str, Any], indices: list) -> torch.Tensor:
+        """Load video frames at given indices."""
         video_path = self.data_root / record["video_path"]
         video_reader = decord.VideoReader(uri=video_path.as_posix())
-        n_frames = len(video_reader)
-        start = record.get("trim_start", 0)
-        end = record.get("trim_end", n_frames)
-        indices = self._temporal_sample(end - start, record["fps"])
-        indices = list(start + indices)
         frames = video_reader.get_batch(indices)
 
-        # do some padding
         if len(frames) != self.n_frames:
             raise ValueError(
                 f"Expected {len(frames)=} to be equal to {self.n_frames=}."
             )
 
-        # crop if specified in the record
         if "crop_top" in record and "crop_bottom" in record:
             frames = frames[:, record["crop_top"] : record["crop_bottom"]]
         if "crop_left" in record and "crop_right" in record:
@@ -296,6 +306,32 @@ class VideoDataset(Dataset):
         frames = self.img_normalize(frames)
 
         return frames
+
+    def _load_video_latent_slice(self, record: Dict[str, Any], frame_indices: list,
+                                 expected_t: int) -> torch.Tensor:
+        """Load pre-computed full-video latent and slice to match frame_indices.
+
+        When the latent range exceeds expected_t, evenly subsample latents
+        to cover the full temporal span (same effect as speedup for video frames).
+        """
+        if "video_latent_path" not in record or not record["video_latent_path"]:
+            raise ValueError("load_video_latent=true but record missing video_latent_path")
+        latent_path = self.data_root / record["video_latent_path"]
+        full_latent = torch.load(latent_path, map_location="cpu", weights_only=True)
+        # full_latent: [C, T_lat, H_lat, W_lat]
+
+        first = int(frame_indices[0])
+        last = int(frame_indices[-1])
+        lat_start = self._frame_to_latent_idx(first)
+        lat_end = self._frame_to_latent_idx(last) + 1  # inclusive → exclusive
+
+        lat_slice = full_latent[:, lat_start:lat_end, :, :]
+        actual_t = lat_slice.size(1)  # real size after slicing (Python may truncate)
+        if actual_t > expected_t:
+            indices = torch.linspace(0, actual_t - 1, expected_t).round().long()
+            indices = indices.clamp(min=0, max=actual_t - 1)
+            return lat_slice.index_select(1, indices)
+        return lat_slice
 
     def _render_bbox(self, record: Dict[str, Any]) -> Tuple[torch.Tensor, torch.Tensor]:
         """

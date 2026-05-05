@@ -1,0 +1,26 @@
+defaults:
+  - video_base
+  - _self_
+
+# Full-horizon SFT: uniform temporal coverage of complete episodes
+data_root: ??? # e.g. /home/zhangmohan/data/robotwin_sft_vanilla
+metadata_path: metadata.csv
+height: 720
+width: 640
+n_frames: 49
+fps: 16
+image_to_video: true
+trim_mode: speedup     # uniform coverage of full episode (vs random_cut)
+pad_mode: discard
+
+filtering:
+  disable: false
+  height: [0, 4096]
+  width: [0, 4096]
+  fps: [0, 120]
+  n_frames: [8, 4096]
+
+augmentation:
+  random_flip: null
+  ratio: [0.98, 1.02]
+  scale: [0.8, 1.0]

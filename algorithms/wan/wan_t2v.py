@@ -79,8 +79,6 @@ class WanTextToVideo(BasePytorchAlgo):
                 "sliding_hist - 1 must be a multiple of vae_stride[0] due to temporal "
                 f"vae. Got {self.sliding_hist} and vae stride {self.vae_stride[0]}"
             )
-        if self.load_video_latent:
-            raise NotImplementedError("Loading video latent is not implemented yet")
         super().__init__(cfg)
 
     @staticmethod
@@ -100,8 +98,9 @@ class WanTextToVideo(BasePytorchAlgo):
     def configure_model(self):
         logging.info("Building model...")
         target_dtype = torch.bfloat16
-        # Initialize text encoder
-        if not self.cfg.load_prompt_embed or (self.is_inference and self.lang_guidance > 0):
+        # Initialize text encoder — always needed for validation/inference even when
+        # load_prompt_embed=true (sample_seq encodes negative prompts).
+        if self.cfg.text_encoder.ckpt_path is not None:
             text_encoder = (
                 umt5_xxl(
                     encoder_only=True,
@@ -112,15 +111,13 @@ class WanTextToVideo(BasePytorchAlgo):
                 .eval()
                 .requires_grad_(False)
             )
-            if self.cfg.text_encoder.ckpt_path is not None:
-                text_encoder.load_state_dict(
-                    torch.load(
-                        self.cfg.text_encoder.ckpt_path,
-                        map_location="cpu",
-                        weights_only=True,
-                        # mmap=True,
-                    )
+            text_encoder.load_state_dict(
+                torch.load(
+                    self.cfg.text_encoder.ckpt_path,
+                    map_location="cpu",
+                    weights_only=True,
                 )
+            )
             if self.cfg.text_encoder.compile:
                 text_encoder = torch.compile(text_encoder)
         else:
@@ -155,6 +152,7 @@ class WanTextToVideo(BasePytorchAlgo):
 
         # Initialize main diffusion model
         use_lora = self.cfg.model.get("use_lora", False)
+        pending_lora_state = None
         if self.cfg.model.tuned_ckpt_path is None:
             self.model = WanModel.from_pretrained(self.cfg.model.ckpt_path)
         elif use_lora:
@@ -170,7 +168,7 @@ class WanTextToVideo(BasePytorchAlgo):
             if tuned_ckpt and tuned_ckpt.endswith(".ckpt"):
                 logging.info(f"Loading Finetuned Weights from {tuned_ckpt}...")
                 # Manually loading state dict from .ckpt
-                checkpoint = torch.load(tuned_ckpt, map_location="cpu", weights_only=True)
+                checkpoint = torch.load(tuned_ckpt, map_location="cpu", weights_only=False)
                 
                 # Filter state dict for 'model.' prefix (standard PL format)
                 prefix = "model."
@@ -183,11 +181,20 @@ class WanTextToVideo(BasePytorchAlgo):
                     # Fallback if no "state_dict" key (raw save)
                     state_dict = checkpoint
 
-                # Load into model
-                missing, unexpected = self.model.load_state_dict(state_dict, strict=False)
-                logging.info(f"Loaded weights. Missing keys: {len(missing)}, Unexpected keys: {len(unexpected)}")
+                has_lora_weights = any(
+                    "lora_" in key or ".lora" in key or "modules_to_save" in key
+                    for key in state_dict
+                )
+                if has_lora_weights:
+                    pending_lora_state = state_dict
+                    logging.info("Detected LoRA-only checkpoint; will load it after PEFT adapters are attached.")
+                else:
+                    missing, unexpected = self.model.load_state_dict(state_dict, strict=False)
+                    logging.info(f"Loaded base/full weights. Missing keys: {len(missing)}, Unexpected keys: {len(unexpected)}")
                 
-                del checkpoint, state_dict
+                del checkpoint
+                if pending_lora_state is None:
+                    del state_dict
                 gc.collect()
 
             # 3. Load LoRA Adapter
@@ -245,6 +252,14 @@ class WanTextToVideo(BasePytorchAlgo):
                     bias="none",
                 )
                 self.model = get_peft_model(self.model, lora_config)
+                if pending_lora_state is not None:
+                    missing, unexpected = self.model.load_state_dict(pending_lora_state, strict=False)
+                    logging.info(
+                        f"Loaded LoRA checkpoint after adapter attach. "
+                        f"Missing keys: {len(missing)}, Unexpected keys: {len(unexpected)}"
+                    )
+                    del pending_lora_state
+                    gc.collect()
                 self.model.print_trainable_parameters()
             else:
                 # Ensure parameters require gradients (assign=True in load_state_dict may freeze them)
@@ -445,8 +460,12 @@ class WanTextToVideo(BasePytorchAlgo):
             prompt_embed_len = batch["prompt_embed_len"]
             prompt_embeds = [u[:v] for u, v in zip(prompt_embeds, prompt_embed_len)]
 
-        video_lat = self.encode_video(rearrange(videos, "b t c h w -> b c t h w"))
-        # video_lat ~ (b, lat_c, lat_t, lat_h, lat_w
+        # Use pre-computed VAE latents when available (offline pre-encoding)
+        if "video_latents" in batch and batch["video_latents"] is not None:
+            video_lat = batch["video_latents"].to(self.device, dtype=self.dtype)
+            # batch["video_latents"] shape: [b, lat_c, lat_t, lat_h, lat_w]
+        else:
+            video_lat = self.encode_video(rearrange(videos, "b t c h w -> b c t h w"))
 
         batch["prompt_embeds"] = prompt_embeds
         batch["video_lat"] = video_lat
@@ -886,3 +905,4 @@ class WanTextToVideo(BasePytorchAlgo):
                 fps=self.cfg.logging.fps,
                 caption="<sep>\n".join(prompt_segments),
             )
+
