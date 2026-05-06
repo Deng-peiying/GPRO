@@ -122,8 +122,7 @@ def load_condition_bank(path: str):
     raise ValueError(f"Unsupported condition bank format: {bank_path}")
 
 
-def get_condition_batch(condition_bank, index: int, device: torch.device, *, n_frames: int, height: int, width: int):
-    item = condition_bank[index]
+def build_condition_batch_from_item(item, device: torch.device, *, n_frames: int, height: int, width: int):
     cond_batch = {}
     for key, value in item.items():
         if isinstance(value, torch.Tensor):
@@ -131,6 +130,11 @@ def get_condition_batch(condition_bank, index: int, device: torch.device, *, n_f
         else:
             cond_batch[key] = value
     return adapt_condition_batch(cond_batch, n_frames=n_frames, height=height, width=width)
+
+
+def get_condition_batch(condition_bank, index: int, device: torch.device, *, n_frames: int, height: int, width: int):
+    item = condition_bank[index]
+    return build_condition_batch_from_item(item, device, n_frames=n_frames, height=height, width=width)
 
 
 def parse_optional_float_list(raw: str | None) -> torch.Tensor | None:
@@ -194,6 +198,18 @@ def _move_state_to_cpu(obj):
     return obj
 
 
+def _move_state_to_device(obj, device: torch.device):
+    if isinstance(obj, torch.Tensor):
+        return obj.to(device)
+    if isinstance(obj, dict):
+        return {key: _move_state_to_device(value, device) for key, value in obj.items()}
+    if isinstance(obj, list):
+        return [_move_state_to_device(value, device) for value in obj]
+    if isinstance(obj, tuple):
+        return tuple(_move_state_to_device(value, device) for value in obj)
+    return obj
+
+
 def extract_trainable_state_dict(module) -> dict[str, torch.Tensor]:
     state_dict = module.state_dict()
     trainable_names = {
@@ -206,6 +222,20 @@ def extract_trainable_state_dict(module) -> dict[str, torch.Tensor]:
         if any(key == name or key.startswith(f"{name}.") for name in trainable_names):
             filtered[key] = value.detach().cpu()
     return filtered
+
+
+def broadcast_condition_batch(
+    cond_batch: dict | None,
+    *,
+    src: int,
+    device: torch.device,
+) -> dict:
+    payload = [_move_state_to_cpu(cond_batch) if get_rank() == src else None]
+    dist.broadcast_object_list(payload, src=src)
+    received = payload[0]
+    if received is None:
+        raise RuntimeError("Failed to broadcast condition batch")
+    return _move_state_to_device(received, device)
 
 
 def distributed_active() -> bool:
@@ -363,6 +393,11 @@ def main():
         action="store_true",
         help="In distributed mode, load large model stacks one rank at a time to reduce CPU RAM spikes.",
     )
+    parser.add_argument(
+        "--rank0-condition-bank",
+        action="store_true",
+        help="In distributed mode, only rank 0 loads the condition bank and broadcasts each step's batch.",
+    )
     args = parser.parse_args()
     validate_args(args)
     rank, world_size = maybe_init_distributed(args)
@@ -511,8 +546,30 @@ def main():
         ),
     )
 
-    condition_bank = load_condition_bank(args.condition_bank)
-    if not condition_bank:
+    condition_bank = None
+    if args.rank0_condition_bank and distributed_active():
+        if is_main_process():
+            condition_bank = load_condition_bank(args.condition_bank)
+            if not condition_bank:
+                raise ValueError(f"Condition bank is empty: {args.condition_bank}")
+            condition_bank_size = len(condition_bank)
+        else:
+            condition_bank_size = 0
+        size_tensor = torch.tensor([condition_bank_size], device=wan_device, dtype=torch.long)
+        dist.broadcast(size_tensor, src=0)
+        condition_bank_size = int(size_tensor.item())
+        if condition_bank_size <= 0:
+            raise ValueError(f"Condition bank is empty: {args.condition_bank}")
+    elif args.stagger_distributed_load and distributed_active():
+        for load_rank in range(world_size):
+            if rank == load_rank:
+                condition_bank = load_condition_bank(args.condition_bank)
+            distributed_barrier()
+        condition_bank_size = len(condition_bank)
+    else:
+        condition_bank = load_condition_bank(args.condition_bank)
+        condition_bank_size = len(condition_bank)
+    if condition_bank is not None and not condition_bank:
         raise ValueError(f"Condition bank is empty: {args.condition_bank}")
 
     history = []
@@ -536,15 +593,28 @@ def main():
     try:
         for step in range(start_step, args.steps):
             set_random_seed(args.seed + 100003 * rank + step, deterministic=args.deterministic)
-            condition_index = step % len(condition_bank)
-            cond_batch = get_condition_batch(
-                condition_bank,
-                condition_index,
-            wan_device,
-            n_frames=policy_algo.n_frames,
-            height=policy_algo.height,
-            width=policy_algo.width,
-            )
+            condition_index = step % condition_bank_size
+            if args.rank0_condition_bank and distributed_active():
+                cond_batch = None
+                if is_main_process():
+                    cond_batch = get_condition_batch(
+                        condition_bank,
+                        condition_index,
+                        wan_device,
+                        n_frames=policy_algo.n_frames,
+                        height=policy_algo.height,
+                        width=policy_algo.width,
+                    )
+                cond_batch = broadcast_condition_batch(cond_batch, src=0, device=wan_device)
+            else:
+                cond_batch = get_condition_batch(
+                    condition_bank,
+                    condition_index,
+                    wan_device,
+                    n_frames=policy_algo.n_frames,
+                    height=policy_algo.height,
+                    width=policy_algo.width,
+                )
             if (
                 "action_seq" not in cond_batch
                 and "action" in cond_batch

@@ -65,6 +65,7 @@ OVERRIDE_SAMPLE_STEPS="${OVERRIDE_SAMPLE_STEPS:-4}"
 
 USE_REFERENCE_MODEL="${USE_REFERENCE_MODEL:-0}"
 STAGGER_DISTRIBUTED_LOAD="${STAGGER_DISTRIBUTED_LOAD:-1}"
+RANK0_CONDITION_BANK="${RANK0_CONDITION_BANK:-1}"
 HARD_VETO_PENALTY="${HARD_VETO_PENALTY:-50.0}"
 MAX_CONTROL_DELTA="${MAX_CONTROL_DELTA:-0.5}"
 FEASIBILITY_WEIGHT="${FEASIBILITY_WEIGHT:-1.0}"
@@ -139,6 +140,7 @@ torchrun \
   --disable-vae-compile \
   --disable-text-encoder-compile \
   $( [[ "${STAGGER_DISTRIBUTED_LOAD}" == "1" ]] && printf '%s' "--stagger-distributed-load" ) \
+  $( [[ "${RANK0_CONDITION_BANK}" == "1" ]] && printf '%s' "--rank0-condition-bank" ) \
   --hard-veto-penalty "${HARD_VETO_PENALTY}" \
   --max-control-delta "${MAX_CONTROL_DELTA}" \
   --feasibility-weight "${FEASIBILITY_WEIGHT}" \
