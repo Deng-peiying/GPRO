@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import torch
+import torch.distributed as dist
 
 from .depth_backends import DepthBackend
 from .idm_backends import IDMBackend
@@ -31,6 +32,7 @@ class StateUnrolledGRPOTrainerConfig:
     ref_update_interval: int = 0
     discount_gamma: float = 1.0
     num_inner_epochs: int = 1
+    distributed: bool = False
 
 
 class StateUnrolledGRPOTrainer:
@@ -53,6 +55,14 @@ class StateUnrolledGRPOTrainer:
         self.reward_model = reward_model
         self.cfg = cfg or StateUnrolledGRPOTrainerConfig()
         self.step = 0
+
+    def _distributed_active(self) -> bool:
+        return (
+            self.cfg.distributed
+            and dist.is_available()
+            and dist.is_initialized()
+            and dist.get_world_size() > 1
+        )
 
     def sync_reference_policy(self) -> None:
         if self.ref_algo is None:
@@ -79,6 +89,52 @@ class StateUnrolledGRPOTrainer:
             if total_sq is not None:
                 grad_norm = total_sq.sqrt().to(device=device, dtype=dtype)
         return grad_norm
+
+    def _sync_trainable_gradients(self) -> None:
+        if not self._distributed_active():
+            return
+        world_size = dist.get_world_size()
+        for param in self.policy_algo.parameters():
+            if not param.requires_grad or param.grad is None:
+                continue
+            dist.all_reduce(param.grad, op=dist.ReduceOp.SUM)
+            param.grad.div_(world_size)
+
+    def _global_normalize_rewards(self, rewards: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Return local advantages, global reward mean, and global reward std."""
+        rewards = rewards.detach().view(-1)
+        if not self._distributed_active():
+            return (
+                group_normalize_rewards(rewards).detach(),
+                rewards.mean().detach(),
+                rewards.std(unbiased=False).detach(),
+            )
+
+        world_size = dist.get_world_size()
+        rank = dist.get_rank()
+        local_n = torch.tensor([rewards.numel()], device=rewards.device, dtype=torch.long)
+        sizes = [torch.zeros_like(local_n) for _ in range(world_size)]
+        dist.all_gather(sizes, local_n)
+        counts = [int(size.item()) for size in sizes]
+        max_n = max(counts)
+
+        padded = torch.zeros(max_n, device=rewards.device, dtype=rewards.dtype)
+        if rewards.numel() > 0:
+            padded[: rewards.numel()] = rewards
+        gathered = [torch.zeros_like(padded) for _ in range(world_size)]
+        dist.all_gather(gathered, padded)
+        global_rewards = torch.cat(
+            [chunk[:count] for chunk, count in zip(gathered, counts) if count > 0],
+            dim=0,
+        )
+        global_advantages = group_normalize_rewards(global_rewards).detach()
+        start = sum(counts[:rank])
+        end = start + counts[rank]
+        return (
+            global_advantages[start:end].to(device=rewards.device),
+            global_rewards.mean().detach(),
+            global_rewards.std(unbiased=False).detach(),
+        )
 
     def train_step(self, cond_batch: dict[str, Any]) -> StateUnrolledGRPOLoss:
         # ── 1. Rollout (no-grad, sequential, OK on memory) ───────────────────
@@ -115,9 +171,10 @@ class StateUnrolledGRPOTrainer:
                 .to(algo_device)
                 .view(-1)
             )
-            group_rewards_mean.append(rewards.mean().detach())
-            group_rewards_std.append(rewards.std(unbiased=False).detach())
-            group_advantages.append(group_normalize_rewards(rewards).detach())
+            advantages, reward_mean, reward_std = self._global_normalize_rewards(rewards)
+            group_rewards_mean.append(reward_mean)
+            group_rewards_std.append(reward_std)
+            group_advantages.append(advantages.detach())
 
         total_traces = sum(len(g.traces) for g in rollout_groups)
         last_loss_dict: StateUnrolledGRPOLoss | None = None
@@ -156,6 +213,7 @@ class StateUnrolledGRPOTrainer:
             if n_valid == 0:
                 continue
 
+            self._sync_trainable_gradients()
             grad_norm = self._compute_grad_norm(algo_device, agg_loss.dtype)
             self.optimizer.step()
 
@@ -175,4 +233,3 @@ class StateUnrolledGRPOTrainer:
             self.sync_reference_policy()
 
         return last_loss_dict
-

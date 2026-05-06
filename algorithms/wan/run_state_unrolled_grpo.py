@@ -3,11 +3,13 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import os
 import random
 from pathlib import Path
 
 import numpy as np
 import torch
+import torch.distributed as dist
 import yaml
 from omegaconf import OmegaConf, open_dict
 
@@ -206,6 +208,58 @@ def extract_trainable_state_dict(module) -> dict[str, torch.Tensor]:
     return filtered
 
 
+def distributed_active() -> bool:
+    return dist.is_available() and dist.is_initialized()
+
+
+def get_rank() -> int:
+    return dist.get_rank() if distributed_active() else 0
+
+
+def get_world_size() -> int:
+    return dist.get_world_size() if distributed_active() else 1
+
+
+def is_main_process() -> bool:
+    return get_rank() == 0
+
+
+def select_rank_value(raw: str | None, *, rank: int, default: str | None = None) -> str | None:
+    if raw is None:
+        return default
+    values = [value.strip() for value in raw.split(",") if value.strip()]
+    if not values:
+        return default
+    if len(values) == 1:
+        return values[0]
+    if rank >= len(values):
+        raise ValueError(f"Rank {rank} has no value in comma-separated argument: {raw}")
+    return values[rank]
+
+
+def maybe_init_distributed(args) -> tuple[int, int]:
+    world_size = int(os.environ.get("WORLD_SIZE", "1"))
+    rank = int(os.environ.get("RANK", "0"))
+    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+    if world_size <= 1:
+        return rank, world_size
+
+    if torch.cuda.is_available():
+        selected_wan_device = select_rank_value(args.wan_device, rank=rank)
+        if selected_wan_device is None:
+            torch.cuda.set_device(local_rank)
+        elif selected_wan_device.startswith("cuda:"):
+            torch.cuda.set_device(int(selected_wan_device.split(":")[-1]))
+    backend = "nccl" if torch.cuda.is_available() else "gloo"
+    dist.init_process_group(backend=backend, init_method="env://")
+    return rank, world_size
+
+
+def cleanup_distributed() -> None:
+    if distributed_active():
+        dist.destroy_process_group()
+
+
 def main():
     parser = argparse.ArgumentParser(description="State-unrolled multi-step GRPO runner for Wan + DA3 + IDM.")
     parser.add_argument("--config", required=True)
@@ -287,22 +341,31 @@ def main():
     parser.add_argument("--disable-text-encoder-compile", action="store_true")
     args = parser.parse_args()
     validate_args(args)
+    rank, world_size = maybe_init_distributed(args)
     set_random_seed(args.seed, deterministic=args.deterministic)
 
     save_dir = Path(args.save_dir)
-    save_dir.mkdir(parents=True, exist_ok=True)
+    if is_main_process():
+        save_dir.mkdir(parents=True, exist_ok=True)
+    if distributed_active():
+        dist.barrier()
 
     cfg = load_config(args.config)
     cfg = apply_runtime_overrides(cfg, args)
-    wan_device = torch.device(args.wan_device if args.wan_device is not None else ("cuda" if torch.cuda.is_available() else "cpu"))
-    ref_device = torch.device(args.ref_device if args.ref_device is not None else wan_device)
-    depth_device = torch.device(args.depth_device if args.depth_device is not None else wan_device)
-    idm_device = torch.device(args.idm_device if args.idm_device is not None else wan_device)
+    selected_wan_device = select_rank_value(
+        args.wan_device,
+        rank=rank,
+        default="cuda" if torch.cuda.is_available() else "cpu",
+    )
+    wan_device = torch.device(selected_wan_device)
+    ref_device = torch.device(select_rank_value(args.ref_device, rank=rank, default=str(wan_device)))
+    depth_device = torch.device(select_rank_value(args.depth_device, rank=rank, default=str(wan_device)))
+    idm_device = torch.device(select_rank_value(args.idm_device, rank=rank, default=str(wan_device)))
 
-    # Ensure VAE, CLIP, and Text Encoder are assigned to specific devices
-    vae_device = torch.device(args.depth_device if args.depth_device is not None else "cuda:1")
-    clip_device = torch.device(args.depth_device if args.depth_device is not None else "cuda:1")
-    text_encoder_device = torch.device(args.depth_device if args.depth_device is not None else "cuda:1")
+    # Ensure VAE, CLIP, and Text Encoder are assigned to this rank's device.
+    vae_device = depth_device
+    clip_device = depth_device
+    text_encoder_device = depth_device
 
     if cfg.get("vae") is not None:
         cfg.vae.device = str(vae_device)
@@ -403,6 +466,7 @@ def main():
             ref_update_interval=args.ref_update_interval,
             discount_gamma=args.discount_gamma,
             num_inner_epochs=args.num_inner_epochs,
+            distributed=world_size > 1,
         ),
     )
 
@@ -428,73 +492,82 @@ def main():
         if ref_algo is not None:
             trainer.sync_reference_policy()
 
-    for step in range(start_step, args.steps):
-        cond_batch = get_condition_batch(
-            condition_bank,
-            step % len(condition_bank),
+    try:
+        for step in range(start_step, args.steps):
+            set_random_seed(args.seed + 100003 * rank + step, deterministic=args.deterministic)
+            condition_index = step % len(condition_bank)
+            cond_batch = get_condition_batch(
+                condition_bank,
+                condition_index,
             wan_device,
             n_frames=policy_algo.n_frames,
             height=policy_algo.height,
             width=policy_algo.width,
-        )
-        if (
-            "action_seq" not in cond_batch
-            and "action" in cond_batch
-            and isinstance(cond_batch["action"], torch.Tensor)
-            and cond_batch["action"].ndim == 2
-        ):
-            cond_batch["action_seq"] = cond_batch["action"].unsqueeze(1)
-            cond_batch["action_seq_mask"] = torch.ones(
-                cond_batch["action"].shape[0],
-                1,
-                device=cond_batch["action"].device,
-                dtype=torch.float32,
             )
-            cond_batch["valid_horizon"] = torch.ones(
-                cond_batch["action"].shape[0],
-                device=cond_batch["action"].device,
-                dtype=torch.long,
-            )
-        loss_dict = trainer.train_step(cond_batch)
-        record = {
-            "step": step + 1,
-            "loss": float(loss_dict.loss.detach().cpu()),
-            "policy_loss": float(loss_dict.policy_loss.detach().cpu()),
-            "kl_loss": float(loss_dict.kl_loss.detach().cpu()),
-            "mean_ratio": float(loss_dict.mean_ratio.detach().cpu()),
-            "mean_advantage": float(loss_dict.mean_advantage.detach().cpu()),
-            "group_reward_mean": float(loss_dict.group_reward_mean.detach().cpu()),
-            "group_reward_std": float(loss_dict.group_reward_std.detach().cpu()),
-            "grad_norm": float(loss_dict.grad_norm.detach().cpu()) if loss_dict.grad_norm is not None else 0.0,
-        }
-        history.append(record)
-
-        if (step + 1) % args.log_interval == 0:
-            print(json.dumps(record))
-        if (step + 1) % args.save_interval == 0:
-            checkpoint = {
-                "step": step + 1,
-                "policy_trainable_state_dict": extract_trainable_state_dict(policy_algo),
-                "optimizer_state_dict": _move_state_to_cpu(optimizer.state_dict()),
-                "history": history,
-            }
-            checkpoint_path = save_dir / f"state_unrolled_grpo_step_{step + 1}.pt"
-            try:
-                torch.save(checkpoint, checkpoint_path)
-            except Exception as exc:
-                print(
-                    json.dumps(
-                        {
-                            "step": step + 1,
-                            "warning": "checkpoint_save_failed",
-                            "path": str(checkpoint_path),
-                            "error": str(exc),
-                        }
-                    )
+            if (
+                "action_seq" not in cond_batch
+                and "action" in cond_batch
+                and isinstance(cond_batch["action"], torch.Tensor)
+                and cond_batch["action"].ndim == 2
+            ):
+                cond_batch["action_seq"] = cond_batch["action"].unsqueeze(1)
+                cond_batch["action_seq_mask"] = torch.ones(
+                    cond_batch["action"].shape[0],
+                    1,
+                    device=cond_batch["action"].device,
+                    dtype=torch.float32,
                 )
+                cond_batch["valid_horizon"] = torch.ones(
+                    cond_batch["action"].shape[0],
+                    device=cond_batch["action"].device,
+                    dtype=torch.long,
+                )
+            loss_dict = trainer.train_step(cond_batch)
+            record = {
+                "step": step + 1,
+                "rank": rank,
+                "world_size": world_size,
+                "condition_index": int(condition_index),
+                "loss": float(loss_dict.loss.detach().cpu()),
+                "policy_loss": float(loss_dict.policy_loss.detach().cpu()),
+                "kl_loss": float(loss_dict.kl_loss.detach().cpu()),
+                "mean_ratio": float(loss_dict.mean_ratio.detach().cpu()),
+                "mean_advantage": float(loss_dict.mean_advantage.detach().cpu()),
+                "group_reward_mean": float(loss_dict.group_reward_mean.detach().cpu()),
+                "group_reward_std": float(loss_dict.group_reward_std.detach().cpu()),
+                "grad_norm": float(loss_dict.grad_norm.detach().cpu()) if loss_dict.grad_norm is not None else 0.0,
+            }
+            history.append(record)
 
-    with (save_dir / "state_unrolled_grpo_history.json").open("w", encoding="utf-8") as f:
-        json.dump(history, f, indent=2)
+            if (step + 1) % args.log_interval == 0 and is_main_process():
+                print(json.dumps(record))
+            if (step + 1) % args.save_interval == 0 and is_main_process():
+                checkpoint = {
+                    "step": step + 1,
+                    "policy_trainable_state_dict": extract_trainable_state_dict(policy_algo),
+                    "optimizer_state_dict": _move_state_to_cpu(optimizer.state_dict()),
+                    "history": history,
+                }
+                checkpoint_path = save_dir / f"state_unrolled_grpo_step_{step + 1}.pt"
+                try:
+                    torch.save(checkpoint, checkpoint_path)
+                except Exception as exc:
+                    print(
+                        json.dumps(
+                            {
+                                "step": step + 1,
+                                "warning": "checkpoint_save_failed",
+                                "path": str(checkpoint_path),
+                                "error": str(exc),
+                            }
+                        )
+                    )
+
+        if is_main_process():
+            with (save_dir / "state_unrolled_grpo_history.json").open("w", encoding="utf-8") as f:
+                json.dump(history, f, indent=2)
+    finally:
+        cleanup_distributed()
 
 
 if __name__ == "__main__":
