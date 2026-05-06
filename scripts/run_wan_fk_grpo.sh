@@ -19,6 +19,10 @@ DA3_REPO_ROOT="${DA3_REPO_ROOT:-/root/autodl-tmp/main_exp/Depth-Anything-3-main}
 
 # ── GPU ─────────────────────────────────────────────────────────────────
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3}"
+export NUMEXPR_MAX_THREADS="${NUMEXPR_MAX_THREADS:-32}"
+export NUMEXPR_NUM_THREADS="${NUMEXPR_NUM_THREADS:-16}"
+export OMP_NUM_THREADS="${OMP_NUM_THREADS:-8}"
+export MKL_NUM_THREADS="${MKL_NUM_THREADS:-8}"
 WAN_DEVICE="${WAN_DEVICE:-cuda:0}"
 REF_DEVICE="${REF_DEVICE:-cuda:1}"
 DEPTH_DEVICE="${DEPTH_DEVICE:-cuda:3}"
@@ -39,6 +43,9 @@ LOG_RATIO_CLIP="${LOG_RATIO_CLIP:-5.0}"
 GRAD_CLIP_NORM="${GRAD_CLIP_NORM:-1.0}"
 REF_UPDATE_INTERVAL="${REF_UPDATE_INTERVAL:-0}"
 DISCOUNT_GAMMA="${DISCOUNT_GAMMA:-1.0}"
+LORA_RANK="${LORA_RANK:-32}"
+LORA_ALPHA="${LORA_ALPHA:-32}"
+LORA_DROPOUT="${LORA_DROPOUT:-0.0}"
 
 # Video shape. The default condition bank is the triple-camera layout:
 # head 640x480 + left/right 320x240 below -> 640x720, full horizon 49 frames.
@@ -63,6 +70,7 @@ echo "FK URDF: $FK_URDF"
 echo "Save dir: $SAVE_DIR"
 echo "Devices: WAN=$WAN_DEVICE REF=$REF_DEVICE DEPTH=$DEPTH_DEVICE IDM=$IDM_DEVICE"
 echo "Video shape: ${N_FRAMES} frames @ ${WIDTH}x${HEIGHT}, sample_steps=$SAMPLE_STEPS"
+echo "LoRA: rank=$LORA_RANK alpha=$LORA_ALPHA dropout=$LORA_DROPOUT"
 
 python -m algorithms.wan.run_state_unrolled_grpo \
     --config "$WAN_CONFIG" \
@@ -101,6 +109,9 @@ python -m algorithms.wan.run_state_unrolled_grpo \
     --grad-clip-norm "$GRAD_CLIP_NORM" \
     --ref-update-interval "$REF_UPDATE_INTERVAL" \
     --discount-gamma "$DISCOUNT_GAMMA" \
+    --lora-rank "$LORA_RANK" \
+    --lora-alpha "$LORA_ALPHA" \
+    --lora-dropout "$LORA_DROPOUT" \
     --wan-device "$WAN_DEVICE" \
     --ref-device "$REF_DEVICE" \
     --depth-device "$DEPTH_DEVICE" \
