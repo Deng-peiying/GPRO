@@ -7,83 +7,84 @@ fi
 
 trap 'rc=$?; echo "[ERROR] ${BASH_SOURCE[0]} failed at line ${LINENO}: ${BASH_COMMAND} (exit=${rc})" >&2' ERR
 
-# Usage:
-#   conda activate grpo_wan
-#   bash scripts/run_wan_grpo_smoke_tuned.sh
-#
-# Optional overrides:
-#   STEPS=10 GROUP_SIZE=4 HORIZON_STEPS=2 bash scripts/run_wan_grpo_smoke_tuned.sh
+# Temporary bring-up wrapper.
+# The paper's SFT-tuned weights are not ready yet, so this uses the EVA
+# original checkpoint as the starting point for FK-grounded GRPO.
 
-export PYTHONPATH="/root/autodl-tmp/main_exp/EVA-main_v0.5:/root/autodl-tmp/main_exp/Depth-Anything-3-main/src:/root/autodl-tmp/repos/vidar:${PYTHONPATH:-}"
-export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
-export TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-1}"
-export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
-export PYTHONUNBUFFERED="${PYTHONUNBUFFERED:-1}"
-
-REPO_ROOT="${REPO_ROOT:-/root/autodl-tmp/main_exp/EVA-main_v0.5}"
-CONFIG_PATH="${CONFIG_PATH:-/root/autodl-tmp/main_exp/EVA-main_v0.5/configurations/algorithm/wan_i2v.yaml}"
+PROJECT_ROOT="${PROJECT_ROOT:-/root/autodl-tmp/main_exp/EVA-main_v0.5}"
+TWO_STAGE_CKPT="${TWO_STAGE_CKPT:-/root/autodl-tmp/main_exp/EVA_Wan/eva_i2v_14B.ckpt}"
 CONDITION_BANK="${CONDITION_BANK:-/root/autodl-tmp/main_exp/wan_grpo_condition_bank_triple.pt}"
-SAVE_DIR="${SAVE_DIR:-/root/autodl-tmp/dpy/grpo_smoke_tuned}"
+SAVE_DIR="${SAVE_DIR:-/root/autodl-tmp/dpy/grpo_serial_train}"
 
-VIDAR_CKPT="${VIDAR_CKPT:-/root/autodl-tmp/main_exp/commit-freeze_test/output/full/152000.pt}"
-DINO_DIR="${DINO_DIR:-/root/autodl-tmp/dpy/my_models/dinov2-with-registers-base}"
-DA3_DIR="${DA3_DIR:-/root/autodl-tmp/main_exp/Depth-Anything-3-main/model/DA3-LARGE-1.1}"
+IDM_CHECKPOINT="${IDM_CHECKPOINT:-/root/autodl-tmp/main_exp/commit-freeze_test/output/full/152000.pt}"
+FK_URDF="${FK_URDF:-/root/autodl-tmp/main_exp/RoboTwin/assets/embodiments/franka-panda/panda.urdf}"
+DA3_MODEL_DIR="${DA3_MODEL_DIR:-/root/autodl-tmp/main_exp/Depth-Anything-3-main/model/DA3-LARGE-1.1}"
 DA3_REPO_ROOT="${DA3_REPO_ROOT:-/root/autodl-tmp/main_exp/Depth-Anything-3-main}"
 
 WAN_DEVICE="${WAN_DEVICE:-cuda:0}"
-DEPTH_DEVICE="${DEPTH_DEVICE:-cuda:1}"
-IDM_DEVICE="${IDM_DEVICE:-cuda:1}"
+REF_DEVICE="${REF_DEVICE:-cuda:1}"
+DEPTH_DEVICE="${DEPTH_DEVICE:-cuda:0}"
+IDM_DEVICE="${IDM_DEVICE:-cuda:0}"
 
-STEPS="${STEPS:-10}"
+STEPS="${STEPS:-3}"
 LOG_INTERVAL="${LOG_INTERVAL:-1}"
-SAVE_INTERVAL="${SAVE_INTERVAL:-5}"
-GROUP_SIZE="${GROUP_SIZE:-8}"
-HORIZON_STEPS="${HORIZON_STEPS:-2}"
+SAVE_INTERVAL="${SAVE_INTERVAL:-1}"
+GROUP_SIZE="${GROUP_SIZE:-1}"
+HORIZON_STEPS="${HORIZON_STEPS:-1}"
+NUM_INNER_EPOCHS="${NUM_INNER_EPOCHS:-1}"
 HIST_LEN="${HIST_LEN:-1}"
 FLOW_SAMPLING_NOISE_STD="${FLOW_SAMPLING_NOISE_STD:-0.05}"
+DISCOUNT_GAMMA="${DISCOUNT_GAMMA:-1.0}"
 
-LR="${LR:-3e-6}"
+LR="${LR:-1e-6}"
 WEIGHT_DECAY="${WEIGHT_DECAY:-1e-4}"
 CLIP_EPS="${CLIP_EPS:-0.1}"
-BETA_KL="${BETA_KL:-1e-4}"
-SURROGATE_SIGMA="${SURROGATE_SIGMA:-2.5}"
+BETA_KL="${BETA_KL:-1e-3}"
+SURROGATE_SIGMA="${SURROGATE_SIGMA:-1.0}"
 LOG_RATIO_CLIP="${LOG_RATIO_CLIP:-2.0}"
 GRAD_CLIP_NORM="${GRAD_CLIP_NORM:-0.5}"
 REF_UPDATE_INTERVAL="${REF_UPDATE_INTERVAL:-0}"
 
-LORA_RANK="${LORA_RANK:-32}"
-LORA_ALPHA="${LORA_ALPHA:-32}"
+LORA_RANK="${LORA_RANK:-8}"
+LORA_ALPHA="${LORA_ALPHA:-16}"
 LORA_DROPOUT="${LORA_DROPOUT:-0.0}"
 GRADIENT_CHECKPOINTING_RATE="${GRADIENT_CHECKPOINTING_RATE:-1.0}"
 
-OVERRIDE_HEIGHT="${OVERRIDE_HEIGHT:-192}"
-OVERRIDE_WIDTH="${OVERRIDE_WIDTH:-256}"
-OVERRIDE_N_FRAMES="${OVERRIDE_N_FRAMES:-5}"
-OVERRIDE_SAMPLE_STEPS="${OVERRIDE_SAMPLE_STEPS:-4}"
+OVERRIDE_HEIGHT="${OVERRIDE_HEIGHT:-720}"
+OVERRIDE_WIDTH="${OVERRIDE_WIDTH:-640}"
+OVERRIDE_N_FRAMES="${OVERRIDE_N_FRAMES:-49}"
+OVERRIDE_SAMPLE_STEPS="${OVERRIDE_SAMPLE_STEPS:-12}"
 
 HARD_VETO_PENALTY="${HARD_VETO_PENALTY:-50.0}"
-# NOTE: Set MAX_CONTROL_DELTA large (999) to disable per-step delta hard-veto.
-# IDM action outputs may have a different scale from control_state, causing
-# spurious vetoes. Set to a real value (e.g. 0.25) only after confirming scales match.
-MAX_CONTROL_DELTA="${MAX_CONTROL_DELTA:-999.0}"
+MAX_CONTROL_DELTA="${MAX_CONTROL_DELTA:-0.25}"
 FEASIBILITY_WEIGHT="${FEASIBILITY_WEIGHT:-1.0}"
 ACTION_RECOVERY_WEIGHT="${ACTION_RECOVERY_WEIGHT:-1.0}"
 IDM_STABILITY_WEIGHT="${IDM_STABILITY_WEIGHT:-0.1}"
 DOF_WEIGHTS="${DOF_WEIGHTS:-1,1,1,1,1,1,1,2,1,1,1,1,1,1,1,2}"
+FK_WEIGHT="${FK_WEIGHT:-0.5}"
+FK_WS_WEIGHT="${FK_WS_WEIGHT:-1.0}"
+FK_SING_WEIGHT="${FK_SING_WEIGHT:-0.5}"
+FK_EEVEL_WEIGHT="${FK_EEVEL_WEIGHT:-0.3}"
+FK_EEACC_WEIGHT="${FK_EEACC_WEIGHT:-0.2}"
+FK_CHAIN_WEIGHT="${FK_CHAIN_WEIGHT:-1.0}"
+FK_DUAL_WEIGHT="${FK_DUAL_WEIGHT:-0.3}"
 
-cd "${REPO_ROOT}"
+cd "${PROJECT_ROOT}"
 
 python -m algorithms.wan.run_state_unrolled_grpo \
-  --config "${CONFIG_PATH}" \
+  --config "${PROJECT_ROOT}/configurations/algorithm/wan_i2v.yaml" \
   --condition-bank "${CONDITION_BANK}" \
   --save-dir "${SAVE_DIR}" \
+  --tuned-ckpt "${TWO_STAGE_CKPT}" \
   --steps "${STEPS}" \
   --log-interval "${LOG_INTERVAL}" \
   --save-interval "${SAVE_INTERVAL}" \
   --group-size "${GROUP_SIZE}" \
   --horizon-steps "${HORIZON_STEPS}" \
+  --num-inner-epochs "${NUM_INNER_EPOCHS}" \
   --hist-len "${HIST_LEN}" \
   --flow-sampling-noise-std "${FLOW_SAMPLING_NOISE_STD}" \
+  --discount-gamma "${DISCOUNT_GAMMA}" \
   --lr "${LR}" \
   --weight-decay "${WEIGHT_DECAY}" \
   --clip-eps "${CLIP_EPS}" \
@@ -96,15 +97,23 @@ python -m algorithms.wan.run_state_unrolled_grpo \
   --lora-alpha "${LORA_ALPHA}" \
   --lora-dropout "${LORA_DROPOUT}" \
   --gradient-checkpointing-rate "${GRADIENT_CHECKPOINTING_RATE}" \
-  --use-reference-model \
-  --idm-checkpoint "${VIDAR_CKPT}" \
+  --idm-checkpoint "${IDM_CHECKPOINT}" \
   --idm-backend vidar \
   --idm-model-name mask \
   --idm-model-output-dim 16 \
   --depth-backend da3 \
-  --da3-model-dir "${DA3_DIR}" \
+  --da3-model-dir "${DA3_MODEL_DIR}" \
   --da3-repo-root "${DA3_REPO_ROOT}" \
+  --fk-urdf "${FK_URDF}" \
+  --fk-weight "${FK_WEIGHT}" \
+  --fk-ws-weight "${FK_WS_WEIGHT}" \
+  --fk-singularity-weight "${FK_SING_WEIGHT}" \
+  --fk-ee-vel-weight "${FK_EEVEL_WEIGHT}" \
+  --fk-ee-acc-weight "${FK_EEACC_WEIGHT}" \
+  --fk-chain-weight "${FK_CHAIN_WEIGHT}" \
+  --fk-dual-arm-weight "${FK_DUAL_WEIGHT}" \
   --wan-device "${WAN_DEVICE}" \
+  --ref-device "${REF_DEVICE}" \
   --depth-device "${DEPTH_DEVICE}" \
   --idm-device "${IDM_DEVICE}" \
   --override-height "${OVERRIDE_HEIGHT}" \

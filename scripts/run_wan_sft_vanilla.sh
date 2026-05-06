@@ -63,6 +63,6 @@ torchrun --nproc_per_node="$NPROC" --master_port="$MASTER_PORT" main.py \
     experiment.tasks='[training]' \
     load="$RESUME" \
     \
-    wandb.mode="${WANDB_MODE:-online}" \
+wandb.mode="${WANDB_MODE:-disabled}" \
     wandb.project="${WANDB_PROJECT:-wan-robot-sft}" \
     +wandb.name="A_vanilla_sft"
