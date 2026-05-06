@@ -14,16 +14,19 @@ trap 'rc=$?; echo "[ERROR] ${BASH_SOURCE[0]} failed at line ${LINENO}: ${BASH_CO
 # Defaults are intentionally conservative so the script can smoke-test the
 # chain without immediately blowing up memory.
 
-PROJECT_ROOT="${PROJECT_ROOT:-/root/autodl-tmp/main_exp/EVA-main_v0.5}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="${PROJECT_ROOT:-$(cd "${SCRIPT_DIR}/.." && pwd)}"
 CONFIG_PATH="${CONFIG_PATH:-${PROJECT_ROOT}/configurations/algorithm/wan_i2v.yaml}"
 CONDITION_BANK="${CONDITION_BANK:-/root/autodl-tmp/main_exp/wan_grpo_condition_bank_triple.pt}"
 SAVE_DIR="${SAVE_DIR:-/root/autodl-tmp/dpy/grpo_smoke_49f}"
 TWO_STAGE_CKPT="${TWO_STAGE_CKPT:-/root/autodl-tmp/main_exp/EVA_Wan/eva_i2v_14B.ckpt}"
 
 VIDAR_CKPT="${VIDAR_CKPT:-/root/autodl-tmp/main_exp/commit-freeze_test/output/full/152000.pt}"
+VIDAR_REPO_ROOT="${VIDAR_REPO_ROOT:-/root/autodl-tmp/main_exp/commit-freeze_test}"
 FK_URDF="${FK_URDF:-/root/autodl-tmp/main_exp/RoboTwin/assets/embodiments/franka-panda/panda.urdf}"
 DA3_DIR="${DA3_DIR:-/root/autodl-tmp/main_exp/Depth-Anything-3-main/model/DA3-LARGE-1.1}"
 DA3_REPO_ROOT="${DA3_REPO_ROOT:-/root/autodl-tmp/main_exp/Depth-Anything-3-main}"
+export PYTHONPATH="${PROJECT_ROOT}:${DA3_REPO_ROOT}/src:${VIDAR_REPO_ROOT}:${PYTHONPATH:-}"
 
 WAN_DEVICE="${WAN_DEVICE:-cuda:0}"
 REF_DEVICE="${REF_DEVICE:-cuda:1}"
