@@ -63,11 +63,13 @@ class RewardBreakdown:
     valid_mask: torch.Tensor
 
     # ── EVA-original (joint-space) ──────────────────────────────────
-    feasibility_gate: torch.Tensor       # C1 + C5 + control-step veto
+    feasibility_gate: torch.Tensor       # catastrophic numerical hard gate
+    joint_limit_reward: torch.Tensor     # C1: soft joint-limit penalty
     action_recovery_reward: torch.Tensor # BC regularization (NOT executability)
     idm_stability_reward: torch.Tensor   # C12 proxy: IDM ensemble variance
     transition_stability_reward: torch.Tensor  # C5-C7: temporal smoothness
     hard_invalid: torch.Tensor           # binary: any hard veto triggered
+    control_delta_reward: torch.Tensor = field(default_factory=lambda: torch.empty(0))
 
     # ── FK-mediated (task-space, NEW) ───────────────────────────────
     fk_workspace: torch.Tensor = field(default_factory=lambda: torch.empty(0))
@@ -173,12 +175,19 @@ class StepExecutabilityReward:
         above = action_t > high.view(1, -1)
         return (below | above).any(dim=1)
 
-    def _delta_violation(self, action_t: torch.Tensor, control_state_t: torch.Tensor | None) -> torch.Tensor:
+    def _control_delta_excess(
+        self,
+        action_t: torch.Tensor,
+        control_state_t: torch.Tensor | None,
+    ) -> torch.Tensor:
         if control_state_t is None or self.max_control_delta is None:
-            return torch.zeros(action_t.shape[0], device=action_t.device, dtype=torch.bool)
-        control = _match_batch(_as_batch(control_state_t, action_t.device, action_t.dtype), action_t.shape[0])
+            return torch.zeros_like(action_t)
+        control = _match_batch(
+            _as_batch(control_state_t, action_t.device, action_t.dtype),
+            action_t.shape[0],
+        )
         delta = action_t - control[:, : action_t.shape[-1]]
-        return delta.abs().amax(dim=1) > float(self.max_control_delta)
+        return (delta.abs() - float(self.max_control_delta)).clamp_min(0)
 
     def score_step(
         self,
@@ -226,14 +235,19 @@ class StepExecutabilityReward:
             joint_limit_cost = torch.zeros(B, device=dev)
             bound_invalid = torch.zeros(B, device=dev, dtype=torch.bool)
 
-        # ── Hard veto for extreme violations ─────────────────────────────
+        # ── Hard veto for catastrophic numerical failures only ────────────
+        # Joint-limit and control-delta violations are handled softly below.
         non_finite = ~torch.isfinite(action_t).all(dim=1)
-        delta_invalid = self._delta_violation(action_t, control_state_t)
-        hard_invalid = non_finite | bound_invalid | delta_invalid
+        hard_invalid = non_finite
         feasibility_gate = -hard_invalid.float() * self.hard_veto_penalty
 
         # Joint limit soft penalty replaces the binary gate for C1
         joint_limit_reward = -joint_limit_cost * 10.0  # scale to be comparable to veto
+
+        # Soft control-step feasibility from the paper:
+        # -||max(0, |a_t - q_t| - threshold)||_1
+        control_delta_excess = self._control_delta_excess(action_t, control_state_t)
+        control_delta_reward = -_weighted_l1(control_delta_excess, weights)
 
         # DEBUG
         if not hasattr(self, "_debug_call_count"):
@@ -256,6 +270,7 @@ class StepExecutabilityReward:
                         f"action_min/max=[{act_min:.3f}, {act_max:.3f}] | "
                         f"action_vec={act_vec_str} | "
                         f"delta_max per sample: {delta_max.tolist()} | "
+                        f"control_delta_reward={control_delta_reward.tolist()} | "
                         f"hard_invalid={hard_invalid.tolist()}"
                     )
                 else:
@@ -316,7 +331,7 @@ class StepExecutabilityReward:
 
         # ── Aggregate reward ──────────────────────────────────────────
         reward = (
-            self.feasibility_weight * (feasibility_gate + joint_limit_reward)
+            self.feasibility_weight * (feasibility_gate + joint_limit_reward + control_delta_reward)
             + self.action_recovery_weight * action_recovery_reward
             + self.idm_stability_weight * idm_stability_reward
             + self.transition_stability_weight * transition_stability_reward
@@ -332,10 +347,12 @@ class StepExecutabilityReward:
             reward=reward.detach(),
             valid_mask=valid_mask.detach(),
             feasibility_gate=feasibility_gate.detach(),
+            joint_limit_reward=joint_limit_reward.detach(),
             action_recovery_reward=action_recovery_reward.detach(),
             idm_stability_reward=idm_stability_reward.detach(),
             transition_stability_reward=transition_stability_reward.detach(),
             hard_invalid=hard_invalid.detach().float(),
+            control_delta_reward=control_delta_reward.detach(),
             fk_workspace=fk_breakdown.workspace_reward.detach(),
             fk_singularity=fk_breakdown.singularity_reward.detach(),
             fk_cartesian_vel=fk_breakdown.cartesian_vel_reward.detach(),
