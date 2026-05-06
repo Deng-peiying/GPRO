@@ -117,6 +117,41 @@ class PyTorchKinematicsFrankaFK(FrankaKinematicsProtocol):
         self.r_min = 0.15    # min distance (self-collision risk near base)
         self.v_ee_max = 1.7  # max Cartesian velocity (m/s)
 
+    @staticmethod
+    def _normalize_quat(quat: torch.Tensor) -> torch.Tensor:
+        return quat / quat.norm(dim=-1, keepdim=True).clamp_min(1e-8)
+
+    @staticmethod
+    def _matrix_to_quat(rot: torch.Tensor) -> torch.Tensor:
+        """Convert rotation matrices to w,x,y,z quaternions."""
+        m00, m01, m02 = rot[:, 0, 0], rot[:, 0, 1], rot[:, 0, 2]
+        m10, m11, m12 = rot[:, 1, 0], rot[:, 1, 1], rot[:, 1, 2]
+        m20, m21, m22 = rot[:, 2, 0], rot[:, 2, 1], rot[:, 2, 2]
+
+        q_abs = torch.sqrt(
+            torch.stack(
+                [
+                    1.0 + m00 + m11 + m22,
+                    1.0 + m00 - m11 - m22,
+                    1.0 - m00 + m11 - m22,
+                    1.0 - m00 - m11 + m22,
+                ],
+                dim=-1,
+            ).clamp_min(0.0)
+        )
+        candidates = torch.stack(
+            [
+                torch.stack([q_abs[:, 0] ** 2, m21 - m12, m02 - m20, m10 - m01], dim=-1),
+                torch.stack([m21 - m12, q_abs[:, 1] ** 2, m10 + m01, m02 + m20], dim=-1),
+                torch.stack([m02 - m20, m10 + m01, q_abs[:, 2] ** 2, m21 + m12], dim=-1),
+                torch.stack([m10 - m01, m02 + m20, m21 + m12, q_abs[:, 3] ** 2], dim=-1),
+            ],
+            dim=1,
+        )
+        candidates = candidates / (2.0 * q_abs.clamp_min(0.1)).unsqueeze(-1)
+        quat = candidates[torch.arange(rot.shape[0], device=rot.device), q_abs.argmax(dim=-1)]
+        return PyTorchKinematicsFrankaFK._normalize_quat(quat)
+
     def _single_fk(self, joints_7dof: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """FK for a single 7-DoF arm.
 
@@ -127,18 +162,8 @@ class PyTorchKinematicsFrankaFK(FrankaKinematicsProtocol):
             ee_xyz: [B, 3]
             ee_quat: [B, 4]  (w, x, y, z) or (x, y, z, w) depending on convention
         """
-        # pytorch_kinematics expects [B, 7] batch of joint angles
-        # Each batch element is a dict from joint_name → angle
-        batch = []
-        for b in range(joints_7dof.shape[0]):
-            q_dict = {
-                name: joints_7dof[b, i].unsqueeze(0)
-                for i, name in enumerate(self._joint_names)
-            }
-            batch.append(q_dict)
-
-        # Stack into batch
-        ret = self._chain.forward_kinematics(batch)
+        joints = joints_7dof.to(device=self.device, dtype=torch.float32)
+        ret = self._chain.forward_kinematics(joints)
         # ret is a Transform3d or matrix; extract translation and rotation
         if hasattr(ret, "get_matrix"):
             matrices = ret.get_matrix()  # [B, 4, 4]
@@ -147,28 +172,8 @@ class PyTorchKinematicsFrankaFK(FrankaKinematicsProtocol):
 
         ee_xyz = matrices[:, :3, 3]
 
-        # Extract quaternion from rotation matrix
         rot = matrices[:, :3, :3]
-        # matrix_to_quaternion: returns [w, x, y, z]
-        trace = rot[:, 0, 0] + rot[:, 1, 1] + rot[:, 2, 2]
-        q_w = torch.zeros(joints_7dof.shape[0], device=joints_7dof.device)
-        q_x = torch.zeros_like(q_w)
-        q_y = torch.zeros_like(q_w)
-        q_z = torch.zeros_like(q_w)
-
-        # Standard matrix → quaternion conversion
-        mask = trace > 0
-        S = torch.sqrt(trace[mask] + 1.0) * 2
-        q_w[mask] = 0.25 * S
-        q_x[mask] = (rot[mask, 2, 1] - rot[mask, 1, 2]) / S
-        q_y[mask] = (rot[mask, 0, 2] - rot[mask, 2, 0]) / S
-        q_z[mask] = (rot[mask, 1, 0] - rot[mask, 0, 1]) / S
-
-        # Handle other cases (simplified — in practice use torch's implementation)
-        # For rigorous conversion, use pytorch3d or a verified implementation.
-        # Here we use the condition check loosely; in production rely on
-        # pytorch_kinematics built-in quaternion extraction if available.
-        ee_quat = torch.stack([q_w, q_x, q_y, q_z], dim=1)
+        ee_quat = self._matrix_to_quat(rot)
 
         return ee_xyz, ee_quat
 
