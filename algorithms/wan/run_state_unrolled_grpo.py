@@ -244,15 +244,34 @@ def maybe_init_distributed(args) -> tuple[int, int]:
     if world_size <= 1:
         return rank, world_size
 
+    device_id = None
     if torch.cuda.is_available():
         selected_wan_device = select_rank_value(args.wan_device, rank=rank)
         if selected_wan_device is None:
             torch.cuda.set_device(local_rank)
+            device_id = torch.device(f"cuda:{local_rank}")
         elif selected_wan_device.startswith("cuda:"):
-            torch.cuda.set_device(int(selected_wan_device.split(":")[-1]))
+            cuda_index = int(selected_wan_device.split(":")[-1])
+            torch.cuda.set_device(cuda_index)
+            device_id = torch.device(f"cuda:{cuda_index}")
     backend = "nccl" if torch.cuda.is_available() else "gloo"
-    dist.init_process_group(backend=backend, init_method="env://")
+    if device_id is not None:
+        try:
+            dist.init_process_group(backend=backend, init_method="env://", device_id=device_id)
+        except TypeError:
+            dist.init_process_group(backend=backend, init_method="env://")
+    else:
+        dist.init_process_group(backend=backend, init_method="env://")
     return rank, world_size
+
+
+def distributed_barrier() -> None:
+    if not distributed_active():
+        return
+    if torch.cuda.is_available():
+        dist.barrier(device_ids=[torch.cuda.current_device()])
+    else:
+        dist.barrier()
 
 
 def cleanup_distributed() -> None:
@@ -339,6 +358,11 @@ def main():
     parser.add_argument("--disable-clip-compile", action="store_true")
     parser.add_argument("--disable-vae-compile", action="store_true")
     parser.add_argument("--disable-text-encoder-compile", action="store_true")
+    parser.add_argument(
+        "--stagger-distributed-load",
+        action="store_true",
+        help="In distributed mode, load large model stacks one rank at a time to reduce CPU RAM spikes.",
+    )
     args = parser.parse_args()
     validate_args(args)
     rank, world_size = maybe_init_distributed(args)
@@ -348,7 +372,7 @@ def main():
     if is_main_process():
         save_dir.mkdir(parents=True, exist_ok=True)
     if distributed_active():
-        dist.barrier()
+        distributed_barrier()
 
     cfg = load_config(args.config)
     cfg = apply_runtime_overrides(cfg, args)
@@ -374,39 +398,56 @@ def main():
     if cfg.get("text_encoder") is not None:
         cfg.text_encoder.device = str(text_encoder_device)
 
-    policy_algo = build_algo(cfg).to(wan_device)
+    policy_algo = None
     ref_algo = None
-    if args.use_reference_model:
-        ref_algo = copy.deepcopy(policy_algo).to(ref_device)
-        ref_algo.eval()
-        for param in ref_algo.parameters():
-            param.requires_grad_(False)
+    optimizer = None
+    idm_backend = None
+    depth_backend = None
 
-    optimizer = build_optimizer(policy_algo, lr=args.lr, weight_decay=args.weight_decay)
+    def build_local_stack() -> None:
+        nonlocal policy_algo, ref_algo, optimizer, idm_backend, depth_backend
+        policy_algo = build_algo(cfg).to(wan_device)
+        ref_algo = None
+        if args.use_reference_model:
+            ref_algo = copy.deepcopy(policy_algo).to(ref_device)
+            ref_algo.eval()
+            for param in ref_algo.parameters():
+                param.requires_grad_(False)
 
-    idm_backend = build_idm_backend(
-        backend_type=args.idm_backend,
-        checkpoint=args.idm_checkpoint,
-        model_name=args.idm_model_name,
-        dinov2_name=args.idm_dinov2_name,
-        left_arm_dim=args.idm_left_arm_dim,
-        right_arm_dim=args.idm_right_arm_dim,
-        model_output_dim=args.idm_model_output_dim,
-        target_action_dim=args.idm_target_action_dim,
-        action_adapter=args.idm_action_adapter,
-        custom_backend_target=args.idm_custom_backend,
-        device=str(idm_device),
-    )
-    depth_backend = build_depth_backend(
-        backend_type=args.depth_backend,
-        model_dir=args.da3_model_dir,
-        da3_repo_root=args.da3_repo_root,
-        device=str(depth_device),
-        process_res=args.da3_process_res,
-        process_res_method=args.da3_process_res_method,
-        use_ray_pose=args.da3_use_ray_pose,
-        ref_view_strategy=args.da3_ref_view_strategy,
-    )
+        optimizer = build_optimizer(policy_algo, lr=args.lr, weight_decay=args.weight_decay)
+
+        idm_backend = build_idm_backend(
+            backend_type=args.idm_backend,
+            checkpoint=args.idm_checkpoint,
+            model_name=args.idm_model_name,
+            dinov2_name=args.idm_dinov2_name,
+            left_arm_dim=args.idm_left_arm_dim,
+            right_arm_dim=args.idm_right_arm_dim,
+            model_output_dim=args.idm_model_output_dim,
+            target_action_dim=args.idm_target_action_dim,
+            action_adapter=args.idm_action_adapter,
+            custom_backend_target=args.idm_custom_backend,
+            device=str(idm_device),
+        )
+        depth_backend = build_depth_backend(
+            backend_type=args.depth_backend,
+            model_dir=args.da3_model_dir,
+            da3_repo_root=args.da3_repo_root,
+            device=str(depth_device),
+            process_res=args.da3_process_res,
+            process_res_method=args.da3_process_res_method,
+            use_ray_pose=args.da3_use_ray_pose,
+            ref_view_strategy=args.da3_ref_view_strategy,
+        )
+
+    if args.stagger_distributed_load and distributed_active():
+        for load_rank in range(world_size):
+            if rank == load_rank:
+                build_local_stack()
+            distributed_barrier()
+    else:
+        build_local_stack()
+
     reward_kwargs = dict(
         action_dim=args.idm_target_action_dim,
         dof_weights=parse_optional_float_list(args.dof_weights),
