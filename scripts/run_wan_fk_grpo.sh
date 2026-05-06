@@ -9,7 +9,7 @@ cd "$PROJECT_ROOT"
 
 # ── Required paths ──────────────────────────────────────────────────────
 CONDITION_BANK="${CONDITION_BANK:-/root/autodl-tmp/main_exp/wan_grpo_condition_bank_triple.pt}"
-TWO_STAGE_CKPT="${TWO_STAGE_CKPT:-/root/autodl-tmp/main_exp/Ours_sft/checkpoints/robot-wan-epoch=55-step=3000.ckpt}"
+TWO_STAGE_CKPT="${TWO_STAGE_CKPT:-/root/autodl-tmp/main_exp/EVA_Wan/eva_i2v_14B.ckpt}"
 WAN_CONFIG="${WAN_CONFIG:-$PROJECT_ROOT/configurations/algorithm/wan_i2v.yaml}"
 SAVE_DIR="${SAVE_DIR:-$PROJECT_ROOT/outputs/fk_grpo}"
 FK_URDF="${FK_URDF:-/root/autodl-tmp/main_exp/RoboTwin/assets/embodiments/franka-panda/panda.urdf}"
