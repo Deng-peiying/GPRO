@@ -192,32 +192,28 @@ class PyTorchKinematicsFrankaFK(FrankaKinematicsProtocol):
         Uses automatic differentiation through FK to compute the positional
         Jacobian, then returns its condition number.
         """
-        joints = joints_7dof.detach().clone().requires_grad_(True)
+        with torch.enable_grad():
+            joints = joints_7dof.detach().clone().requires_grad_(True)
+            xyz, _ = self._single_fk(joints)
 
-        xyz, _ = self._single_fk(joints)
+            jac_rows = []
+            for i in range(3):  # x, y, z
+                grad = torch.autograd.grad(
+                    xyz[:, i].sum(), joints, create_graph=False, retain_graph=(i < 2)
+                )[0]
+                jac_rows.append(grad)
 
-        # Compute positional Jacobian via autodiff
-        jac_rows = []
-        for i in range(3):  # x, y, z
-            grad = torch.autograd.grad(
-                xyz[:, i].sum(), joints, create_graph=False, retain_graph=(i < 2)
-            )[0]
-            jac_rows.append(grad)
+            J = torch.stack(jac_rows, dim=1)  # [B, 3, 7]
+            JJT = J @ J.transpose(1, 2)  # [B, 3, 3]
+            try:
+                eigvals = torch.linalg.eigvalsh(JJT)  # [B, 3], sorted ascending
+                cond = torch.sqrt(
+                    eigvals[:, -1].clamp_min(1e-8) / eigvals[:, 0].clamp_min(1e-8)
+                )
+            except Exception:
+                cond = torch.linalg.norm(J, dim=(1, 2)) / torch.linalg.det(JJT).abs().sqrt().clamp_min(1e-8)
 
-        J = torch.stack(jac_rows, dim=1)  # [B, 3, 7]
-
-        # Condition number via SVD approximation: ||J||_F^2 / det(J JT)
-        # Use pseudo-inverse condition: σ_max / σ_min via SVD
-        # For 3x7 Jacobian: compute singular values of 3x3 matrix J·J^T
-        JJT = J @ J.transpose(1, 2)  # [B, 3, 3]
-        try:
-            eigvals = torch.linalg.eigvalsh(JJT)  # [B, 3], sorted ascending
-            cond = torch.sqrt(eigvals[:, -1].clamp_min(1e-8) / eigvals[:, 0].clamp_min(1e-8))
-        except Exception:
-            # Fallback: use Frobenius norm ratio
-            cond = torch.linalg.norm(J, dim=(1, 2)) / torch.linalg.det(JJT).abs().sqrt().clamp_min(1e-8)
-
-        return cond
+        return cond.detach()
 
 
 def build_franka_fk(
